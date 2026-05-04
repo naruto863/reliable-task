@@ -1,0 +1,268 @@
+############################
+# 基础依赖 / 包管理器
+############################
+node_modules/
+jspm_packages/
+bower_components/
+
+# pnpm
+.pnpm-store/
+.pnpm-debug.log*
+
+# yarn
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+.yarnrc.yml
+
+# npm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+############################
+# 日志
+############################
+logs
+*.log
+
+############################
+# 运行时与进程文件
+############################
+pids
+*.pid
+*.seed
+*.pid.lock
+
+############################
+# 构建产物 / 打包输出
+############################
+
+dist-ssr/
+build/
+out/
+.output/          # Nuxt 3
+.nuxt/            # Nuxt 2/3
+.nitro/           # Nuxt 3 nitro
+.cache/           # 多种工具通用缓存目录（如 webpack/rollup 等的部分插件）
+backend/target/
+
+# VuePress / VitePress / Docs
+docs/.vuepress/dist/
+docs/.vitepress/dist/
+.vitepress/dist/
+
+############################
+# Vite / Webpack / Rollup / Parcel 缓存
+############################
+# Vite
+.vite/
+
+# Webpack
+.cache/
+webpack-stats.json
+
+# Parcel
+.parcel-cache/
+
+# Rollup（部分插件会生成）
+.rollup.cache/
+
+############################
+# TypeScript / Babel / ESLint / Stylelint 缓存
+############################
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+.babelcache/
+.swc/
+.swc_cache/
+
+############################
+# 测试 / 覆盖率 / 报告
+############################
+coverage/
+.nyc_output/
+test-results/
+junit.xml
+playwright-report/
+blob-report/
+cypress/videos/
+cypress/screenshots/
+reports/
+allure-results/
+allure-report/
+
+############################
+# Storybook / 可视化测试
+############################
+storybook-static/
+.chromatic/
+
+############################
+# 本地环境变量 / 私密配置
+############################
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Spring Boot 本地配置
+**/src/main/resources/application.yml
+**/src/main/resources/application.yaml
+**/src/main/resources/application.properties
+**/src/main/resources/application-*.yml
+**/src/main/resources/application-*.yaml
+**/src/main/resources/application-*.properties
+!**/src/main/resources/application-example.yml
+!**/src/main/resources/application-example.yaml
+!**/src/main/resources/application-example.properties
+
+# 可能的本地配置文件（按需保留/删除）
+*.local
+*.local.*
+
+############################
+# SSR / 框架特定
+############################
+# Nuxt 2
+.nuxt/
+
+# Quasar（如使用）
+.quasar/
+.quasar-cache/
+.quasar.conf.js.*.local
+
+# Electron（如使用）
+dist_electron/
+release/
+
+############################
+# 开发工具 / IDE
+############################
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# JetBrains/IntelliJ 系列
+.idea_modules/
+atlassian-ide-plugin.xml
+
+# Eclipse IDE
+.classpath
+.project
+.factorypath
+.settings/
+
+############################
+# 操作系统杂项
+############################
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+############################
+# 本地证书 / key / 临时文件
+############################
+*.pem
+*.key
+*.crt
+*.p12
+
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+
+############################
+# 运行产物 / 本地持久化（按需）
+############################
+# 例如本地 sqlite、数据导出等（不需要可删）
+*.sqlite
+*.db
+
+############################
+# 部署平台（可选）
+############################
+.vercel/
+.netlify/
+.firebase/
+.serverless/
+.sst/
+.turbo/
+.next/            # 如果你混用 Next.js
+
+############################
+# Maven 构建产物
+############################
+**/target/
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+.m2/
+.gradle
+
+# Java / JVM
+*.class
+*.ctxt
+.mtj.tmp/
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+hs_err_pid*
+replay_pid*
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Environments
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Temporary files
+*.temp

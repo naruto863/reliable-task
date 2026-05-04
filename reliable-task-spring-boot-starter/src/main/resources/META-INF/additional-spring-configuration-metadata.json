@@ -1,0 +1,208 @@
+{
+  "properties": [
+    {
+      "name": "reliable-task.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether ReliableTask auto-configuration is enabled.",
+      "defaultValue": true
+    },
+    {
+      "name": "reliable-task.worker.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether the Worker polling scheduler is enabled.",
+      "defaultValue": true
+    },
+    {
+      "name": "reliable-task.worker.poll-interval-ms",
+      "type": "java.lang.Long",
+      "description": "Worker polling interval in milliseconds.",
+      "defaultValue": 5000
+    },
+    {
+      "name": "reliable-task.worker.batch-size",
+      "type": "java.lang.Integer",
+      "description": "Maximum number of candidate tasks fetched by one Worker poll.",
+      "defaultValue": 10
+    },
+    {
+      "name": "reliable-task.worker.backpressure.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether Worker backpressure is enabled. Disabled by default to preserve V1.5 polling behavior.",
+      "defaultValue": false
+    },
+    {
+      "name": "reliable-task.worker.backpressure.min-fetch-size",
+      "type": "java.lang.Integer",
+      "description": "Minimum fetch size required when Worker backpressure is enabled. Polling is skipped when available capacity is below this value.",
+      "defaultValue": 1
+    },
+    {
+      "name": "reliable-task.worker.backpressure.max-fetch-size",
+      "type": "java.lang.Integer",
+      "description": "Maximum fetch size allowed when Worker backpressure is enabled.",
+      "defaultValue": 10
+    },
+    {
+      "name": "reliable-task.worker.heartbeat.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether Worker heartbeat reporting is enabled. Disabled by default until V2 heartbeat components are configured.",
+      "defaultValue": false
+    },
+    {
+      "name": "reliable-task.worker.heartbeat.interval-ms",
+      "type": "java.lang.Long",
+      "description": "Worker heartbeat and running task lease renewal interval in milliseconds.",
+      "defaultValue": 10000
+    },
+    {
+      "name": "reliable-task.worker.heartbeat.lock-renewal-ttl-seconds",
+      "type": "java.lang.Long",
+      "description": "Lock TTL in seconds written by running task lease renewal.",
+      "defaultValue": 300
+    },
+    {
+      "name": "reliable-task.worker.heartbeat.stale-worker-threshold-seconds",
+      "type": "java.lang.Long",
+      "description": "Threshold in seconds used to identify stale workers.",
+      "defaultValue": 60
+    },
+    {
+      "name": "reliable-task.recovery.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether timeout recovery scanning is enabled.",
+      "defaultValue": true
+    },
+    {
+      "name": "reliable-task.recovery.interval-ms",
+      "type": "java.lang.Long",
+      "description": "Timeout recovery scan interval in milliseconds.",
+      "defaultValue": 30000
+    },
+    {
+      "name": "reliable-task.recovery.timeout-seconds",
+      "type": "java.lang.Long",
+      "description": "Compatibility timeout setting in seconds. V1.5 recovery uses lock_expire_at; this value remains for existing configurations.",
+      "defaultValue": 300
+    },
+    {
+      "name": "reliable-task.recovery.max-reset-per-scan",
+      "type": "java.lang.Integer",
+      "description": "Maximum number of timeout tasks reset during one recovery scan.",
+      "defaultValue": 100
+    },
+    {
+      "name": "reliable-task.executor.default-core-size",
+      "type": "java.lang.Integer",
+      "description": "Default core thread count for task execution pools.",
+      "defaultValue": 4
+    },
+    {
+      "name": "reliable-task.executor.default-max-size",
+      "type": "java.lang.Integer",
+      "description": "Default maximum thread count for task execution pools.",
+      "defaultValue": 16
+    },
+    {
+      "name": "reliable-task.executor.default-queue-capacity",
+      "type": "java.lang.Integer",
+      "description": "Default queue capacity for task execution pools.",
+      "defaultValue": 100
+    },
+    {
+      "name": "reliable-task.executor.keep-alive-seconds",
+      "type": "java.lang.Integer",
+      "description": "Thread keep-alive time in seconds for task execution pools.",
+      "defaultValue": 60
+    },
+    {
+      "name": "reliable-task.metrics.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether Micrometer metrics are enabled.",
+      "defaultValue": false
+    },
+    {
+      "name": "reliable-task.alert.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether ReliableTask alarm triggering is enabled.",
+      "defaultValue": false
+    },
+    {
+      "name": "reliable-task.alert.pending-threshold",
+      "type": "java.lang.Long",
+      "description": "Pending task backlog threshold. Values less than or equal to zero disable backlog alarms.",
+      "defaultValue": 0
+    },
+    {
+      "name": "reliable-task.alert.failure-rate-threshold",
+      "type": "java.lang.Double",
+      "description": "Failure rate threshold in the recent metrics window. Range is 0 to 1.",
+      "defaultValue": 1.0
+    },
+    {
+      "name": "reliable-task.alert.window-seconds",
+      "type": "java.lang.Long",
+      "description": "Metrics window size in seconds for failure-rate alarms.",
+      "defaultValue": 300
+    },
+    {
+      "name": "reliable-task.alert.scan-interval-ms",
+      "type": "java.lang.Long",
+      "description": "Pending backlog alarm scan interval in milliseconds.",
+      "defaultValue": 30000
+    },
+    {
+      "name": "reliable-task.idempotency.strategy",
+      "type": "java.lang.String",
+      "description": "Default task submission idempotency strategy.",
+      "defaultValue": "STRICT_UNIQUE"
+    },
+    {
+      "name": "reliable-task.serializer.type",
+      "type": "java.lang.String",
+      "description": "Default task payload serializer type.",
+      "defaultValue": "JACKSON"
+    },
+    {
+      "name": "reliable-task.store.table-prefix",
+      "type": "java.lang.String",
+      "description": "Reserved table prefix setting for storage implementations.",
+      "defaultValue": ""
+    },
+    {
+      "name": "reliable-task.admin.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether ReliableTask Admin REST APIs are enabled.",
+      "defaultValue": true
+    },
+    {
+      "name": "reliable-task.admin.port",
+      "type": "java.lang.Integer",
+      "description": "Reserved Admin port setting for future separated management server support.",
+      "defaultValue": 9090
+    },
+    {
+      "name": "reliable-task.admin.context-path",
+      "type": "java.lang.String",
+      "description": "Reserved Admin context path setting. V1.5 REST API path remains /api/reliable-task.",
+      "defaultValue": "/reliable-task"
+    },
+    {
+      "name": "reliable-task.admin.audit.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether Admin operation audit logging is enabled.",
+      "defaultValue": false
+    },
+    {
+      "name": "reliable-task.admin.auth.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether Admin authorization checks are enabled.",
+      "defaultValue": false
+    },
+    {
+      "name": "reliable-task.admin.batch.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether Admin batch operation APIs are enabled.",
+      "defaultValue": false
+    }
+  ]
+}

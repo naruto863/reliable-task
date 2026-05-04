@@ -1,0 +1,94 @@
+package com.reliabletask.executor.handler;
+
+import com.reliabletask.core.annotation.TaskHandler;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.aop.support.AopUtils;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ApplicationListener;
+import org.springframework.context.event.ContextRefreshedEvent;
+import org.springframework.core.annotation.AnnotationUtils;
+import org.springframework.util.StringUtils;
+
+import java.util.Map;
+
+/**
+ * 任务处理器自动注册器
+ *
+ * <p>在 Spring 容器刷新完成后，自动收集所有标注了 @TaskHandler 注解的 Spring Bean，
+ * 并注册到 TaskHandlerRegistry 中。
+ *
+ * <p>工作流程:
+ * <pre>
+ *   Spring 容器启动 → 组件扫描发现 Handler Bean
+ *   → ContextRefreshedEvent 触发 → 收集所有 TaskHandler Bean
+ *   → 逐个注册到 TaskHandlerRegistry → 重复检测 → 启动日志输出
+ * </pre>
+ *
+ * <p>业务方使用方式:
+ * <pre>
+ * &#64;Component
+ * &#64;TaskHandler("CREATE_SHIPMENT")
+ * public class CreateShipmentHandler implements com.reliabletask.core.spi.TaskHandler {
+ *     public void execute(TaskInstance task) { ... }
+ * }
+ * </pre>
+ * Handler 必须先通过 @Component 或 @Bean 成为 Spring Bean。
+ */
+@Slf4j
+public class TaskHandlerAutoRegistrar implements ApplicationListener<ContextRefreshedEvent> {
+
+    private final TaskHandlerRegistry registry;
+
+    public TaskHandlerAutoRegistrar(TaskHandlerRegistry registry) {
+        this.registry = registry;
+    }
+
+    @Override
+    public void onApplicationEvent(ContextRefreshedEvent event) {
+        ApplicationContext context = event.getApplicationContext();
+        Map<String, com.reliabletask.core.spi.TaskHandler> handlers =
+                context.getBeansOfType(com.reliabletask.core.spi.TaskHandler.class);
+
+        if (handlers.isEmpty()) {
+            log.info("No TaskHandler beans found in context");
+            return;
+        }
+
+        int registeredCount = 0;
+        for (Map.Entry<String, com.reliabletask.core.spi.TaskHandler> entry : handlers.entrySet()) {
+            String beanName = entry.getKey();
+            com.reliabletask.core.spi.TaskHandler handler = entry.getValue();
+
+            Class<?> handlerClass = AopUtils.getTargetClass(handler);
+            TaskHandler annotation = AnnotationUtils.findAnnotation(handlerClass, TaskHandler.class);
+            String taskType = handler.getTaskType();
+            validateTaskType(beanName, handlerClass, annotation, taskType);
+            try {
+                registry.registerHandler(handler);
+                registeredCount++;
+                log.info("Auto-registered TaskHandler: beanName={}, taskType={}, class={}",
+                        beanName, taskType, handlerClass.getSimpleName());
+            } catch (IllegalStateException e) {
+                log.error("Failed to register TaskHandler: beanName={}, taskType={}, reason={}",
+                        beanName, taskType, e.getMessage());
+                throw e;
+            }
+        }
+
+        log.info("TaskHandlerAutoRegistrar completed: {} handlers registered", registeredCount);
+    }
+
+    private void validateTaskType(String beanName, Class<?> handlerClass,
+                                  TaskHandler annotation, String taskType) {
+        if (!StringUtils.hasText(taskType)) {
+            throw new IllegalStateException("TaskHandler taskType must not be blank: beanName="
+                    + beanName + ", class=" + handlerClass.getName());
+        }
+        if (annotation != null && !annotation.value().equals(taskType)) {
+            throw new IllegalStateException("@TaskHandler value must match getTaskType(): beanName="
+                    + beanName + ", class=" + handlerClass.getName()
+                    + ", annotation=" + annotation.value()
+                    + ", getTaskType=" + taskType);
+        }
+    }
+}

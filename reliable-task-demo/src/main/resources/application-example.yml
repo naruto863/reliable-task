@@ -1,0 +1,80 @@
+server:
+  port: ${RELIABLE_TASK_SERVER_PORT:8080}
+
+spring:
+  datasource:
+    url: ${RELIABLE_TASK_DATASOURCE_URL:jdbc:mysql://localhost:3306/reliable_task?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai}
+    username: ${RELIABLE_TASK_DATASOURCE_USERNAME:reliable_task_user}
+    password: ${RELIABLE_TASK_DATASOURCE_PASSWORD:change_me}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+
+  main:
+    allow-bean-definition-overriding: true
+
+reliable-task:
+  enabled: true
+  worker:
+    enabled: true
+    poll-interval-ms: 5000
+    batch-size: 10
+    backpressure:
+      enabled: false
+      min-fetch-size: 1
+      max-fetch-size: 10
+    heartbeat:
+      enabled: false
+      interval-ms: 10000
+      lock-renewal-ttl-seconds: 300
+      stale-worker-threshold-seconds: 60
+  recovery:
+    enabled: true
+    interval-ms: 30000
+    timeout-seconds: 300
+    max-reset-per-scan: 100
+  metrics:
+    enabled: false
+  alert:
+    enabled: false
+    pending-threshold: 0
+    failure-rate-threshold: 1.0
+    window-seconds: 300
+    scan-interval-ms: 30000
+  idempotency:
+    strategy: STRICT_UNIQUE
+  serializer:
+    type: JACKSON
+  executor:
+    default-core-size: 4
+    default-max-size: 16
+    default-queue-capacity: 100
+    keep-alive-seconds: 60
+    pools:
+      SEND_EMAIL:
+        core-size: 8
+        max-size: 16
+        queue-capacity: 200
+  admin:
+    enabled: true
+    audit:
+      enabled: false
+    auth:
+      enabled: false
+    batch:
+      enabled: false
+
+management:
+  endpoint:
+    metrics:
+      enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+
+logging:
+  level:
+    com.reliabletask: DEBUG

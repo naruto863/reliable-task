@@ -1,0 +1,75 @@
+package com.reliabletask.executor.recovery;
+
+import com.reliabletask.core.model.TaskInstance;
+import com.reliabletask.core.spi.TaskStore;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+/**
+ * 任务恢复补偿扫描器
+ *
+ * <p>定时扫描 RUNNING 状态但锁租约已过期的任务，
+ * 这些任务可能是以下原因遗留的孤儿任务:
+ * <ul>
+ *   <li>Worker 进程崩溃，任务未标记为失败</li>
+ *   <li>TransactionSynchronization.afterCommit() 抛异常，任务未写入</li>
+ *   <li>网络抖动导致 Worker 与数据库连接中断</li>
+ * </ul>
+ *
+ * <p>状态流转: RUNNING (timeout) → PENDING
+ *
+ * <p>补偿扫描是防丢失的最后一道防线，确保任务最终能被重新消费。
+ */
+@Slf4j
+@RequiredArgsConstructor
+public class TaskRecoveryScheduler {
+
+    private final TaskStore taskStore;
+    private final RecoveryProperties properties;
+
+    /**
+     * 定时补偿扫描
+     *
+     * <p>按配置的间隔执行，查找 RUNNING 超时任务并重置为 PENDING。
+     * 如果开关关闭则跳过执行。
+     */
+    @Scheduled(fixedDelayString = "${reliable-task.recovery.interval-ms:30000}")
+    public void scanAndRecover() {
+        if (!properties.isEnabled()) {
+            return;
+        }
+
+        LocalDateTime timeoutThreshold = LocalDateTime.now();
+        List<TaskInstance> timeoutTasks = taskStore.findTimeoutTasks(timeoutThreshold);
+
+        if (timeoutTasks.isEmpty()) {
+            return;
+        }
+
+        log.warn("Found {} timeout RUNNING tasks, starting recovery", timeoutTasks.size());
+
+        int resetCount = 0;
+        for (TaskInstance task : timeoutTasks) {
+            if (resetCount >= properties.getMaxResetPerScan()) {
+                log.warn("Reached max reset limit ({}), remaining tasks will be handled in next scan",
+                        properties.getMaxResetPerScan());
+                break;
+            }
+
+            boolean success = taskStore.resetTimeoutTask(task.getId());
+            if (success) {
+                resetCount++;
+                log.info("Recovered timeout task: id={}, type={}, bizId={}, lastUpdate={}",
+                        task.getId(), task.getTaskType(), task.getBizId(), task.getUpdateTime());
+            }
+        }
+
+        if (resetCount > 0) {
+            log.info("Recovery scan completed, reset {} tasks to PENDING", resetCount);
+        }
+    }
+}
