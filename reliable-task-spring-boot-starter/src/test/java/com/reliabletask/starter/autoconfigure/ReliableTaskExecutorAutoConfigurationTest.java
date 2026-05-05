@@ -33,12 +33,14 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.autoconfigure.task.TaskExecutionAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.lang.reflect.Proxy;
+
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
 
 @DisplayName("ReliableTaskExecutorAutoConfiguration 测试")
 class ReliableTaskExecutorAutoConfigurationTest {
@@ -104,7 +106,7 @@ class ReliableTaskExecutorAutoConfigurationTest {
     @Test
     @DisplayName("自定义 TaskTemplate 时自动配置不覆盖")
     void customTaskTemplate_isNotOverridden() {
-        TaskTemplate customTaskTemplate = mock(TaskTemplate.class);
+        TaskTemplate customTaskTemplate = stub(TaskTemplate.class);
 
         contextRunner
                 .withBean(TaskTemplate.class, () -> customTaskTemplate)
@@ -115,10 +117,10 @@ class ReliableTaskExecutorAutoConfigurationTest {
     @Test
     @DisplayName("自定义 V2 SPI Bean 时自动配置不覆盖")
     void customV2SpiBeans_areNotOverridden() {
-        TaskPayloadSerializer customSerializer = mock(TaskPayloadSerializer.class);
-        TaskMetricsRecorder customMetricsRecorder = mock(TaskMetricsRecorder.class);
-        TaskAuditRecorder customAuditRecorder = mock(TaskAuditRecorder.class);
-        WorkerHeartbeatReporter customHeartbeatReporter = mock(WorkerHeartbeatReporter.class);
+        TaskPayloadSerializer customSerializer = stub(TaskPayloadSerializer.class);
+        TaskMetricsRecorder customMetricsRecorder = stub(TaskMetricsRecorder.class);
+        TaskAuditRecorder customAuditRecorder = stub(TaskAuditRecorder.class);
+        WorkerHeartbeatReporter customHeartbeatReporter = stub(WorkerHeartbeatReporter.class);
 
         contextRunner
                 .withBean(TaskPayloadSerializer.class, () -> customSerializer)
@@ -185,6 +187,23 @@ class ReliableTaskExecutorAutoConfigurationTest {
                     assertThat(context).hasNotFailed();
                     assertThat(context).getBean(TaskHandlerRegistry.class)
                             .satisfies(registry -> assertThat(registry.hasHandler("CREATE_SHIPMENT")).isTrue());
+                });
+    }
+
+    @Test
+    @DisplayName("与 Spring Boot 默认 taskExecutor Bean 共存")
+    void springBootTaskExecutorBean_canCoexistWithReliableTaskExecutor() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(
+                        TaskExecutionAutoConfiguration.class,
+                        ReliableTaskAutoConfiguration.class,
+                        ReliableTaskExecutorAutoConfiguration.class))
+                .withUserConfiguration(TaskStoreTestConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).hasBean("taskExecutor");
+                    assertThat(context).hasBean("reliableTaskExecutor");
+                    assertThat(context).hasSingleBean(TaskExecutor.class);
                 });
     }
 
@@ -264,8 +283,28 @@ class ReliableTaskExecutorAutoConfigurationTest {
     static class TaskStoreTestConfiguration {
         @Bean
         TaskStore taskStore() {
-            return mock(TaskStore.class);
+            return stub(TaskStore.class);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T stub(Class<T> type) {
+        return (T) Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, (proxy, method, args) -> {
+            Class<?> returnType = method.getReturnType();
+            if (returnType == boolean.class) {
+                return false;
+            }
+            if (returnType == int.class) {
+                return 0;
+            }
+            if (returnType == long.class) {
+                return 0L;
+            }
+            if (returnType == double.class) {
+                return 0D;
+            }
+            return null;
+        });
     }
 
     @Configuration(proxyBeanMethods = false)

@@ -59,6 +59,7 @@
                 <version>3.2.5</version>
                 <configuration>
                     <mainClass>com.reliabletask.demo.DemoApplication</mainClass>
+                    <jvmArguments>-Djava.io.tmpdir=${project.build.directory}</jvmArguments>
                 </configuration>
             </plugin>
         </plugins>

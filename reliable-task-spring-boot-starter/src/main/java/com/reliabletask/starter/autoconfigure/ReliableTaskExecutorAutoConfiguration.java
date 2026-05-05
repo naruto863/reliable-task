@@ -241,13 +241,13 @@ public class ReliableTaskExecutorAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(TaskExecutor.class)
-    public TaskExecutor taskExecutor(TaskStore taskStore, TaskHandlerRegistry handlerRegistry,
-                                     TaskExecutorFactory executorFactory, RetryEngine retryEngine,
-                                     TaskPayloadSerializer payloadSerializer,
-                                     WorkerProperties workerProperties,
-                                     TaskMetricsRecorder metricsRecorder,
-                                     TaskAuditRecorder auditRecorder,
-                                     TaskAlertService alertService) {
+    public TaskExecutor reliableTaskExecutor(TaskStore taskStore, TaskHandlerRegistry handlerRegistry,
+                                             TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                                             TaskPayloadSerializer payloadSerializer,
+                                             WorkerProperties workerProperties,
+                                             TaskMetricsRecorder metricsRecorder,
+                                             TaskAuditRecorder auditRecorder,
+                                             TaskAlertService alertService) {
         return new TaskExecutor(taskStore, handlerRegistry, executorFactory, retryEngine,
                 new TaskExecutionInterceptor(), payloadSerializer, workerProperties,
                 metricsRecorder, auditRecorder, alertService);
