@@ -23,3 +23,6 @@ This project follows Semantic Versioning.
 
 - Document that Admin APIs require authentication, authorization, audit logging, and network access controls before production use.
 - Keep real local configuration out of version control and use placeholder values in example configuration.
+
+[Unreleased]: https://github.com/naruto863/reliable-task/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/naruto863/reliable-task/releases/tag/v0.1.0
