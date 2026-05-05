@@ -109,7 +109,7 @@ flowchart LR
 
 ```bash
 git clone https://github.com/naruto863/reliable-task.git
-cd reliabletask
+cd reliable-task
 ```
 
 ### 2. 初始化数据库
@@ -166,7 +166,7 @@ curl "http://localhost:8080/api/reliable-task/tasks/stats"
 <dependency>
     <groupId>com.reliabletask</groupId>
     <artifactId>reliable-task-spring-boot-starter</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.1.0</version>
 </dependency>
 ```
 

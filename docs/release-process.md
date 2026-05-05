@@ -12,30 +12,55 @@
 ## 发布分支
 
 - 日常开发合入 `main`。
-- 发布准备使用 `release/vX.Y.Z` 分支，例如 `release/v0.1.0`。
-- 发布分支只接受版本号、文档、测试修复和开源安全修正。
+- 首次开源版本使用 `main` 加 annotated tag 的轻量发布流程。
+- 不为 `v0.1.0` 创建 release 分支；只有在发布修复需要隔离、长期维护多个版本线或多人并行冲突明显时，才考虑单独 release 分支。
 
 ## 发布前 Checklist
 
-- [ ] 确认 `git status --ignored --short` 中没有待提交的 `.env`、`application.yml`、IDE 配置、`.m2`、`target` 或其他本地文件。
+- [ ] 当前在 `main` 分支。
+- [ ] 已执行 `git pull --ff-only origin main` 并确认本地是最新代码。
+- [ ] `git status --short` 为空，没有待提交变更。
+- [ ] `git status --ignored --short` 中没有待提交的 `.env`、`application.yml`、IDE 配置、`.m2`、`target` 或其他本地文件。
 - [ ] 运行敏感信息扫描，确认没有真实密钥、Token、Cookie、真实账号、真实内部地址或真实用户数据。
-- [ ] 确认示例配置只存在于 `.env.example` 和 `application-example.yml`。
+- [ ] 确认示例配置只存在于 `.env.example` 和 `application-example.yml`，且只包含占位符。
 - [ ] 更新 `CHANGELOG.md`，把目标版本日期改为实际发布日期。
+- [ ] 准备 `docs/releases/vX.Y.Z.md` 作为 GitHub Release Notes。
 - [ ] 将根 `pom.xml` 和各模块版本从 `X.Y.Z-SNAPSHOT` 调整为 `X.Y.Z`。
 - [ ] 执行 `mvn -B test` 并确认通过。
 - [ ] 确认 README 快速开始、Demo 文档和安全说明与当前版本一致。
-- [ ] 确认 `SECURITY.md` 中的安全联系方式和 GitHub Security Advisory 链接；未知时保留 `TODO`，不要写内部地址。
+- [ ] 确认 `SECURITY.md` 中的安全联系方式和 GitHub Security Advisory 链接，且没有内部地址。
 
 ## 发布命令
 
 ```bash
-mvn versions:set -DnewVersion=0.1.0
+git checkout main
+git pull --ff-only origin main
+git status
 mvn -B test
-git add pom.xml reliable-task-*/pom.xml CHANGELOG.md
-git commit -m "chore: prepare release v0.1.0"
+
+git add CHANGELOG.md docs/releases/v0.1.0.md README.md .env.example SECURITY.md docs/release-process.md docs/open-source-check-report.md pom.xml reliable-task-*/pom.xml
+git commit -m "docs(release): prepare v0.1.0"
+
 git tag -a v0.1.0 -m "Release v0.1.0"
 git push origin main
 git push origin v0.1.0
+```
+
+使用整理好的 Release Notes 创建 GitHub Release：
+
+```bash
+gh release create v0.1.0 \
+  --title "v0.1.0 - Initial Release" \
+  --notes-file docs/releases/v0.1.0.md
+```
+
+如果想先创建草稿 Release：
+
+```bash
+gh release create v0.1.0 \
+  --title "v0.1.0 - Initial Release" \
+  --notes-file docs/releases/v0.1.0.md \
+  --draft
 ```
 
 如果发布后继续开发下一个版本：
@@ -49,40 +74,14 @@ git push origin main
 
 ## GitHub Release 内容模板
 
-```markdown
-# ReliableTask v0.1.0 - First Open Source Preview
-
-ReliableTask 是一个基于 Spring Boot 3 的可靠异步任务执行框架，面向业务事务提交后需要稳定执行异步动作的场景。
-
-## Highlights
-
-- 首次开源 `reliable-task-core`、`reliable-task-store`、`reliable-task-executor`、`reliable-task-admin`、`reliable-task-spring-boot-starter` 和 `reliable-task-demo`。
-- 支持事务内任务投递、数据库任务存储、Worker 调度、自动重试、超时补偿、线程池隔离和管理 API。
-- 提供 Apache-2.0 License、README、CHANGELOG、CONTRIBUTING、SECURITY、Issue/PR 模板和基础 Maven CI。
-
-## Requirements
-
-- Java 21+
-- Maven 3.8+
-- Spring Boot 3.2.5
-- MySQL 8.0+
-
-## Security Notes
-
-- Admin API 生产使用前必须接入认证、授权、审计和网络访问控制。
-- 不要提交或公开真实数据库账号、密码、Token、Cookie、内部地址或真实用户数据。
-- Maven Central 发布状态：TODO。
-
-## Changelog
-
-详见 `CHANGELOG.md`。
-```
+GitHub Release 内容以 `docs/releases/vX.Y.Z.md` 为准。Release Notes 应面向用户说明 Highlights、What's Included、Getting Started、Notes 和 Checks，不要简单复制 git log，也不要写未实现能力。
 
 ## 发布后验证 Checklist
 
+- [ ] GitHub tag `v0.1.0` 存在。
 - [ ] GitHub Release 页面标题、说明、Tag 和源码包正确。
+- [ ] Release Notes 展示正常。
 - [ ] 从 Tag 重新检出后可以执行 `mvn -B test`。
 - [ ] 源码包不包含 `.env`、本地 `application.yml`、IDE 配置、`.m2`、`target`。
 - [ ] Issue 模板、PR 模板和 CI 在 GitHub 页面可用。
 - [ ] README 中的快速开始、配置示例、License、Security 链接可访问。
-
