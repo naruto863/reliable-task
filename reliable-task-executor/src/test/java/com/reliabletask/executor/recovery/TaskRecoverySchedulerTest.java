@@ -13,6 +13,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -53,6 +54,17 @@ class TaskRecoverySchedulerTest {
         when(taskStore.findTimeoutTasks(any())).thenReturn(List.of());
 
         scheduler.scanAndRecover();
+
+        verify(taskStore).findTimeoutTasks(any());
+        verify(taskStore, never()).resetTimeoutTask(any());
+    }
+
+    @Test
+    @DisplayName("scanAndRecover - store 返回 null 时按空列表处理")
+    void scanAndRecover_nullTimeoutTasks_noReset() {
+        when(taskStore.findTimeoutTasks(any())).thenReturn(null);
+
+        assertDoesNotThrow(() -> scheduler.scanAndRecover());
 
         verify(taskStore).findTimeoutTasks(any());
         verify(taskStore, never()).resetTimeoutTask(any());
@@ -128,8 +140,8 @@ class TaskRecoverySchedulerTest {
     }
 
     @Test
-    @DisplayName("scanAndRecover - 使用当前时间扫描已过期锁")
-    void scanAndRecover_usesCurrentTimeForExpiredLockScan() {
+    @DisplayName("scanAndRecover - timeoutSeconds 参与恢复扫描阈值")
+    void scanAndRecover_usesTimeoutSecondsForExpiredLockScan() {
         properties.setTimeoutSeconds(600L);
 
         when(taskStore.findTimeoutTasks(any())).thenReturn(List.of());
@@ -137,7 +149,7 @@ class TaskRecoverySchedulerTest {
         scheduler.scanAndRecover();
 
         verify(taskStore).findTimeoutTasks(argThat(threshold -> {
-            LocalDateTime expected = LocalDateTime.now();
+            LocalDateTime expected = LocalDateTime.now().minusSeconds(600L);
             return threshold.isAfter(expected.minusSeconds(1))
                     && threshold.isBefore(expected.plusSeconds(1));
         }));

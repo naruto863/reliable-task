@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.reliabletask.core.dto.PageResult;
 import com.reliabletask.core.dto.TaskQueryRequest;
 import com.reliabletask.core.enums.TaskStatus;
+import com.reliabletask.core.lifecycle.TaskStateMachine;
 import com.reliabletask.core.model.AuditLog;
 import com.reliabletask.core.model.BatchOperationResult;
 import com.reliabletask.core.model.TaskInstance;
@@ -164,7 +165,17 @@ public class MyBatisTaskStore implements TaskStore {
 
     @Override
     public boolean claimTask(Long id, String workerId) {
+        return claimTask(id, workerId, LocalDateTime.now().plusMinutes(DEFAULT_LOCK_TTL_MINUTES));
+    }
+
+    @Override
+    public boolean claimTask(Long id, String workerId, LocalDateTime lockExpireAt) {
+        TaskStateMachine.requireTransit(TaskStatus.PENDING, TaskStatus.RUNNING);
+        TaskStateMachine.requireTransit(TaskStatus.RETRYING, TaskStatus.RUNNING);
         LocalDateTime now = LocalDateTime.now();
+        LocalDateTime effectiveLockExpireAt = lockExpireAt != null
+                ? lockExpireAt
+                : now.plusMinutes(DEFAULT_LOCK_TTL_MINUTES);
         int rows = taskMapper.update(null,
                 new LambdaUpdateWrapper<ReliableTaskEntity>()
                         .eq(ReliableTaskEntity::getId, id)
@@ -175,7 +186,7 @@ public class MyBatisTaskStore implements TaskStore {
                         .set(ReliableTaskEntity::getStatus, TaskStatus.RUNNING.getCode())
                         .set(ReliableTaskEntity::getWorkerId, workerId)
                         .set(ReliableTaskEntity::getLockedAt, now)
-                        .set(ReliableTaskEntity::getLockExpireAt, now.plusMinutes(DEFAULT_LOCK_TTL_MINUTES))
+                        .set(ReliableTaskEntity::getLockExpireAt, effectiveLockExpireAt)
                         .set(ReliableTaskEntity::getLastExecuteTime, now)
                         .setSql("execute_count = execute_count + 1")
                         .setSql("version = version + 1")
@@ -207,6 +218,7 @@ public class MyBatisTaskStore implements TaskStore {
 
     @Override
     public boolean markSuccess(Long id) {
+        TaskStateMachine.requireTransit(TaskStatus.RUNNING, TaskStatus.SUCCESS);
         int rows = taskMapper.update(null,
                 new LambdaUpdateWrapper<ReliableTaskEntity>()
                         .eq(ReliableTaskEntity::getId, id)
@@ -229,6 +241,7 @@ public class MyBatisTaskStore implements TaskStore {
 
     @Override
     public boolean markWaitRetry(Long id, String errorCode, String errorMsg, LocalDateTime nextExecuteTime) {
+        TaskStateMachine.requireTransit(TaskStatus.RUNNING, TaskStatus.RETRYING);
         int rows = taskMapper.update(null,
                 new LambdaUpdateWrapper<ReliableTaskEntity>()
                         .eq(ReliableTaskEntity::getId, id)
@@ -253,6 +266,8 @@ public class MyBatisTaskStore implements TaskStore {
 
     @Override
     public boolean markDead(Long id, String errorCode, String errorMsg) {
+        TaskStateMachine.requireTransit(TaskStatus.RUNNING, TaskStatus.DEAD);
+        TaskStateMachine.requireTransit(TaskStatus.RETRYING, TaskStatus.DEAD);
         int rows = taskMapper.update(null,
                 new LambdaUpdateWrapper<ReliableTaskEntity>()
                         .eq(ReliableTaskEntity::getId, id)
@@ -274,12 +289,18 @@ public class MyBatisTaskStore implements TaskStore {
 
     @Override
     public boolean cancelTask(Long id) {
+        TaskStateMachine.requireTransit(TaskStatus.PENDING, TaskStatus.CANCELLED);
+        TaskStateMachine.requireTransit(TaskStatus.RUNNING, TaskStatus.CANCELLED);
+        TaskStateMachine.requireTransit(TaskStatus.RETRYING, TaskStatus.CANCELLED);
+        TaskStateMachine.requireTransit(TaskStatus.FAILED, TaskStatus.CANCELLED);
         int rows = taskMapper.update(null,
                 new LambdaUpdateWrapper<ReliableTaskEntity>()
                         .eq(ReliableTaskEntity::getId, id)
-                        .notIn(ReliableTaskEntity::getStatus,
-                                TaskStatus.SUCCESS.getCode(),
-                                TaskStatus.CANCELLED.getCode())
+                        .in(ReliableTaskEntity::getStatus,
+                                TaskStatus.PENDING.getCode(),
+                                TaskStatus.RUNNING.getCode(),
+                                TaskStatus.RETRYING.getCode(),
+                                TaskStatus.FAILED.getCode())
                         .set(ReliableTaskEntity::getStatus, TaskStatus.CANCELLED.getCode())
                         .set(ReliableTaskEntity::getFinishTime, LocalDateTime.now())
                         .set(ReliableTaskEntity::getWorkerId, null)
@@ -293,6 +314,8 @@ public class MyBatisTaskStore implements TaskStore {
 
     @Override
     public boolean requeueTask(Long id) {
+        TaskStateMachine.requireTransit(TaskStatus.DEAD, TaskStatus.PENDING);
+        TaskStateMachine.requireTransit(TaskStatus.CANCELLED, TaskStatus.PENDING);
         int rows = taskMapper.update(null,
                 new LambdaUpdateWrapper<ReliableTaskEntity>()
                         .eq(ReliableTaskEntity::getId, id)
@@ -301,6 +324,7 @@ public class MyBatisTaskStore implements TaskStore {
                                 TaskStatus.CANCELLED.getCode())
                         .set(ReliableTaskEntity::getStatus, TaskStatus.PENDING.getCode())
                         .set(ReliableTaskEntity::getErrorMsg, null)
+                        .set(ReliableTaskEntity::getLastErrorCode, null)
                         .set(ReliableTaskEntity::getExecuteCount, 0)
                         .set(ReliableTaskEntity::getNextExecuteTime, LocalDateTime.now())
                         .set(ReliableTaskEntity::getWorkerId, null)
@@ -343,6 +367,7 @@ public class MyBatisTaskStore implements TaskStore {
 
     @Override
     public boolean resetTimeoutTask(Long id) {
+        TaskStateMachine.requireTransit(TaskStatus.RUNNING, TaskStatus.PENDING);
         int rows = taskMapper.update(null,
                 new LambdaUpdateWrapper<ReliableTaskEntity>()
                         .eq(ReliableTaskEntity::getId, id)
@@ -366,6 +391,9 @@ public class MyBatisTaskStore implements TaskStore {
                         String workerId, String traceId) {
         ReliableTaskLogEntity logEntity = new ReliableTaskLogEntity();
         logEntity.setTaskId(taskId);
+        logEntity.setAttemptNo(executeNo);
+        logEntity.setStatusBefore(statusBefore);
+        logEntity.setStatusAfter(statusAfter);
         logEntity.setExecuteTime(LocalDateTime.now());
         logEntity.setDurationMs(durationMs);
         logEntity.setStatus(success ? TaskStatus.SUCCESS.getCode() : TaskStatus.FAILED.getCode());

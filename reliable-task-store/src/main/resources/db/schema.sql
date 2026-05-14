@@ -70,6 +70,9 @@ CREATE TABLE IF NOT EXISTS `reliable_task_log`
 (
     `id`            BIGINT   NOT NULL AUTO_INCREMENT COMMENT '主键ID',
     `task_id`       BIGINT   NOT NULL COMMENT '关联的任务主表 ID',
+    `attempt_no`    INT               DEFAULT NULL COMMENT '本次执行序号',
+    `status_before` VARCHAR(32)       DEFAULT NULL COMMENT '执行前任务状态',
+    `status_after`  VARCHAR(32)       DEFAULT NULL COMMENT '执行后任务状态',
     `execute_time`  DATETIME NOT NULL COMMENT '执行开始时间',
     `duration_ms`   BIGINT            DEFAULT NULL COMMENT '执行耗时，单位毫秒',
     `status`        TINYINT  NOT NULL COMMENT '执行结果: 2-SUCCESS(成功) 3-FAILED(失败)',
@@ -82,7 +85,7 @@ CREATE TABLE IF NOT EXISTS `reliable_task_log`
     -- 按任务 ID 查询执行历史
     KEY `idx_task_id` (`task_id`),
     -- 按时间范围查询日志
-    KEY `idx_create_time` (`create_time`)
+    KEY `idx_task_log_create_time` (`create_time`)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_unicode_ci COMMENT ='任务执行日志表';

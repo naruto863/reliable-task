@@ -42,25 +42,38 @@ public class TaskAdminController {
     private final boolean authEnabled;
     private final TaskAuthorizationProvider authorizationProvider;
     private final long staleWorkerThresholdSeconds;
+    private final boolean auditEnabled;
+    private final boolean batchEnabled;
 
     public TaskAdminController(TaskStore taskStore) {
-        this(taskStore, false, new NoopTaskAuthorizationProvider(), 60L);
+        this(taskStore, false, new NoopTaskAuthorizationProvider(), 60L, true, true);
     }
 
     public TaskAdminController(TaskStore taskStore,
                                boolean authEnabled,
                                TaskAuthorizationProvider authorizationProvider) {
-        this(taskStore, authEnabled, authorizationProvider, 60L);
+        this(taskStore, authEnabled, authorizationProvider, 60L, true, true);
     }
 
     public TaskAdminController(TaskStore taskStore,
                                boolean authEnabled,
                                TaskAuthorizationProvider authorizationProvider,
                                long staleWorkerThresholdSeconds) {
+        this(taskStore, authEnabled, authorizationProvider, staleWorkerThresholdSeconds, true, true);
+    }
+
+    public TaskAdminController(TaskStore taskStore,
+                               boolean authEnabled,
+                               TaskAuthorizationProvider authorizationProvider,
+                               long staleWorkerThresholdSeconds,
+                               boolean auditEnabled,
+                               boolean batchEnabled) {
         this.taskStore = taskStore;
         this.authEnabled = authEnabled;
         this.authorizationProvider = authorizationProvider;
         this.staleWorkerThresholdSeconds = staleWorkerThresholdSeconds;
+        this.auditEnabled = auditEnabled;
+        this.batchEnabled = batchEnabled;
     }
 
     /**
@@ -290,6 +303,9 @@ public class TaskAdminController {
     @GetMapping("/tasks/{id}/audit-logs")
     public Result<List<AuditLog>> getAuditLogsByTaskId(@PathVariable Long id,
                                                        @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator) {
+        if (!auditEnabled) {
+            return Result.error(404, "Audit log is disabled");
+        }
         Result<List<AuditLog>> forbidden = forbidIfNeeded(TASK_AUDIT_VIEW, operator, id, false, null);
         if (forbidden != null) {
             return forbidden;
@@ -308,6 +324,9 @@ public class TaskAdminController {
             @RequestParam(defaultValue = "1") int pageNum,
             @RequestParam(defaultValue = "20") int pageSize,
             @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String currentOperator) {
+        if (!auditEnabled) {
+            return Result.error(404, "Audit log is disabled");
+        }
         Result<PageResult<AuditLog>> forbidden =
                 forbidIfNeeded(TASK_AUDIT_VIEW, currentOperator, null, false, null);
         if (forbidden != null) {
@@ -323,6 +342,9 @@ public class TaskAdminController {
     public Result<BatchOperationResult> previewBatch(@RequestBody BatchOperationRequest request,
                                                      @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator,
                                                      @RequestHeader(value = "X-Trace-Id", required = false) String traceId) {
+        if (!batchEnabled) {
+            return Result.error(404, "Batch operation is disabled");
+        }
         Result<BatchOperationResult> forbidden =
                 forbidIfNeeded(TASK_BATCH_OPERATION, operator, null, true, traceId);
         if (forbidden != null) {
@@ -353,6 +375,9 @@ public class TaskAdminController {
     public Result<BatchOperationResult> batchRequeue(@RequestBody BatchOperationRequest request,
                                                      @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator,
                                                      @RequestHeader(value = "X-Trace-Id", required = false) String traceId) {
+        if (!batchEnabled) {
+            return Result.error(404, "Batch operation is disabled");
+        }
         Result<BatchOperationResult> forbidden =
                 forbidIfNeeded(TASK_BATCH_OPERATION, operator, null, true, traceId);
         if (forbidden != null) {
@@ -375,6 +400,9 @@ public class TaskAdminController {
     public Result<BatchOperationResult> batchCancel(@RequestBody BatchOperationRequest request,
                                                     @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator,
                                                     @RequestHeader(value = "X-Trace-Id", required = false) String traceId) {
+        if (!batchEnabled) {
+            return Result.error(404, "Batch operation is disabled");
+        }
         Result<BatchOperationResult> forbidden =
                 forbidIfNeeded(TASK_BATCH_OPERATION, operator, null, true, traceId);
         if (forbidden != null) {
@@ -413,6 +441,9 @@ public class TaskAdminController {
 
     private void recordAdminAudit(String operationType, String operator, Long taskId,
                                   String requestSummary, String result, String errorMsg, String traceId) {
+        if (!auditEnabled) {
+            return;
+        }
         taskStore.saveAuditLog(AuditLog.builder()
                 .operationType(operationType)
                 .operator(operator)
@@ -429,6 +460,9 @@ public class TaskAdminController {
 
     private void recordBatchAudit(String operationType, String operator, Long batchId,
                                   String requestSummary, String result, String errorMsg, String traceId) {
+        if (!auditEnabled) {
+            return;
+        }
         taskStore.saveAuditLog(AuditLog.builder()
                 .operationType(operationType)
                 .operator(operator)

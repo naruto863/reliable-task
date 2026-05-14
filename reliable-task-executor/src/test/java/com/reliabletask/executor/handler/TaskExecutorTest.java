@@ -22,6 +22,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -259,6 +264,65 @@ class TaskExecutorTest {
         verify(taskStore).markWaitRetry(eq(6L), anyString(), anyString(), any());
     }
 
+    @Test
+    @DisplayName("execute - 超时后取消 Future 并中断 Handler")
+    void execute_timeout_cancelsFutureAndInterruptsHandler() throws Exception {
+        InterruptAwareSlowHandler handler = new InterruptAwareSlowHandler();
+        registry.registerHandler(handler);
+
+        TaskInstance task = TaskInstance.builder()
+                .id(16L).taskType("INTERRUPT_AWARE").bizId("BIZ-16")
+                .status(TaskStatus.RUNNING).executeCount(1).maxRetryCount(3)
+                .retryStrategy(RetryStrategyType.FIXED).retryIntervalMs(1000L)
+                .build();
+
+        boolean interrupted;
+        try {
+            executor.execute(task);
+            interrupted = handler.interrupted.await(1, TimeUnit.SECONDS);
+        } finally {
+            Thread runningThread = handler.runningThread.get();
+            if (runningThread != null) {
+                runningThread.interrupt();
+            }
+        }
+
+        verify(taskStore).markWaitRetry(eq(16L), anyString(), anyString(), any());
+        org.junit.jupiter.api.Assertions.assertTrue(interrupted,
+                "Timed out handler should observe interruption after Future.cancel(true)");
+    }
+
+    @Test
+    @DisplayName("execute - TaskHandler.maxConcurrency 限制同类型并发")
+    void execute_handlerMaxConcurrency_limitsSameHandlerConcurrency() throws Exception {
+        ConcurrencyLimitedHandler handler = new ConcurrencyLimitedHandler();
+        registry.registerHandler(handler);
+
+        TaskInstance t1 = TaskInstance.builder()
+                .id(17L).taskType("LIMITED").bizId("BIZ-17")
+                .status(TaskStatus.RUNNING).executeCount(1).maxRetryCount(3)
+                .build();
+        TaskInstance t2 = TaskInstance.builder()
+                .id(18L).taskType("LIMITED").bizId("BIZ-18")
+                .status(TaskStatus.RUNNING).executeCount(1).maxRetryCount(3)
+                .build();
+
+        ExecutorService callers = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> f1 = callers.submit(() -> executor.execute(t1));
+            Future<?> f2 = callers.submit(() -> executor.execute(t2));
+
+            f1.get(3, TimeUnit.SECONDS);
+            f2.get(3, TimeUnit.SECONDS);
+        } finally {
+            callers.shutdownNow();
+        }
+
+        assertEquals(1, handler.maxObserved.get());
+        verify(taskStore).markSuccess(17L);
+        verify(taskStore).markSuccess(18L);
+    }
+
     // ==================== Test Handlers ====================
 
     static class SuccessHandler implements TaskHandler {
@@ -325,6 +389,48 @@ class TaskExecutorTest {
         public void execute(TaskInstance task) throws Exception {
             Thread.sleep(50);
         }
+        public long timeoutMs() { return 5000L; }
+    }
+
+    static class InterruptAwareSlowHandler implements TaskHandler {
+        private final AtomicReference<Thread> runningThread = new AtomicReference<>();
+        private final CountDownLatch interrupted = new CountDownLatch(1);
+
+        public String getTaskType() { return "INTERRUPT_AWARE"; }
+        public void execute(TaskInstance task) throws Exception {
+            runningThread.set(Thread.currentThread());
+            try {
+                while (true) {
+                    Thread.sleep(50);
+                }
+            } catch (InterruptedException e) {
+                interrupted.countDown();
+                Thread.currentThread().interrupt();
+                throw e;
+            }
+        }
+        public long timeoutMs() { return 100L; }
+    }
+
+    static class ConcurrencyLimitedHandler implements TaskHandler {
+        private final AtomicInteger active = new AtomicInteger();
+        private final AtomicInteger maxObserved = new AtomicInteger();
+        private final AtomicBoolean failed = new AtomicBoolean();
+
+        public String getTaskType() { return "LIMITED"; }
+        public void execute(TaskInstance task) throws Exception {
+            int now = active.incrementAndGet();
+            maxObserved.accumulateAndGet(now, Math::max);
+            if (now > 1) {
+                failed.set(true);
+            }
+            try {
+                Thread.sleep(150);
+            } finally {
+                active.decrementAndGet();
+            }
+        }
+        public int maxConcurrency() { return 1; }
         public long timeoutMs() { return 5000L; }
     }
 }

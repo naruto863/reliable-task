@@ -14,8 +14,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -65,8 +67,20 @@ class WorkerSchedulerTest {
     }
 
     @Test
+    @DisplayName("pollAndExecute - store 返回 null 时按空列表处理")
+    void pollAndExecute_nullPendingTasks_noClaim() {
+        when(taskStore.fetchPendingTasks(10)).thenReturn(null);
+
+        assertDoesNotThrow(() -> scheduler.pollAndExecute());
+
+        verify(taskStore).fetchPendingTasks(10);
+        verify(taskStore, never()).claimTask(anyLong(), anyString(), any(LocalDateTime.class));
+    }
+
+    @Test
     @DisplayName("pollAndExecute - 有任务时尝试抢占")
     void pollAndExecute_withTasks_attemptsClaim() {
+        properties.setLockTtlSeconds(45L);
         TaskInstance task = TaskInstance.builder()
                 .id(1L)
                 .taskType("TYPE_A")
@@ -75,13 +89,16 @@ class WorkerSchedulerTest {
                 .build();
 
         when(taskStore.fetchPendingTasks(10)).thenReturn(List.of(task));
-        when(taskStore.claimTask(eq(1L), anyString())).thenReturn(true);
+        when(taskStore.claimTask(eq(1L), anyString(), any(LocalDateTime.class))).thenReturn(true);
         when(taskStore.getById(1L)).thenReturn(task);
 
         scheduler.pollAndExecute();
 
         verify(taskStore).fetchPendingTasks(10);
-        verify(taskStore).claimTask(anyLong(), anyString());
+        verify(taskStore).claimTask(eq(1L), anyString(), argThat(lockExpireAt -> {
+            long seconds = java.time.Duration.between(LocalDateTime.now(), lockExpireAt).toSeconds();
+            return seconds >= 43 && seconds <= 45;
+        }));
         verify(taskExecutor).execute(task);
     }
 
@@ -96,11 +113,11 @@ class WorkerSchedulerTest {
                 .build();
 
         when(taskStore.fetchPendingTasks(10)).thenReturn(List.of(task));
-        when(taskStore.claimTask(eq(1L), anyString())).thenReturn(false);
+        when(taskStore.claimTask(eq(1L), anyString(), any(LocalDateTime.class))).thenReturn(false);
 
         scheduler.pollAndExecute();
 
-        verify(taskStore).claimTask(anyLong(), anyString());
+        verify(taskStore).claimTask(eq(1L), anyString(), any(LocalDateTime.class));
         verify(taskExecutor, never()).execute(any());
     }
 
@@ -111,14 +128,14 @@ class WorkerSchedulerTest {
         TaskInstance t2 = TaskInstance.builder().id(2L).taskType("TYPE_B").bizId("BIZ-2").status(TaskStatus.PENDING).build();
 
         when(taskStore.fetchPendingTasks(10)).thenReturn(List.of(t1, t2));
-        when(taskStore.claimTask(eq(1L), anyString())).thenThrow(new RuntimeException("DB error"));
-        when(taskStore.claimTask(eq(2L), anyString())).thenReturn(true);
+        when(taskStore.claimTask(eq(1L), anyString(), any(LocalDateTime.class))).thenThrow(new RuntimeException("DB error"));
+        when(taskStore.claimTask(eq(2L), anyString(), any(LocalDateTime.class))).thenReturn(true);
         when(taskStore.getById(2L)).thenReturn(t2);
 
         scheduler.pollAndExecute();
 
-        verify(taskStore, times(2)).claimTask(anyLong(), anyString());
-        verify(taskStore).claimTask(eq(2L), anyString());
+        verify(taskStore, times(2)).claimTask(anyLong(), anyString(), any(LocalDateTime.class));
+        verify(taskStore).claimTask(eq(2L), anyString(), any(LocalDateTime.class));
         verify(taskExecutor).execute(t2);
     }
 

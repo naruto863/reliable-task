@@ -296,6 +296,18 @@ class MyBatisTaskStoreTest {
     }
 
     @Test
+    @DisplayName("claimTask - 支持显式锁过期时间")
+    void claimTask_withExplicitLockExpireAt_returnsTrue() {
+        LocalDateTime lockExpireAt = LocalDateTime.now().plusSeconds(45);
+        when(taskMapper.update(isNull(), any())).thenReturn(1);
+
+        boolean result = taskStore.claimTask(1L, "worker-1", lockExpireAt);
+
+        assertTrue(result);
+        verify(taskMapper).update(isNull(), any(LambdaUpdateWrapper.class));
+    }
+
+    @Test
     @DisplayName("renewTaskLease - 续约运行中任务")
     void renewTaskLease_updatesHeartbeatAndLockExpireAt() {
         when(taskMapper.update(isNull(), any())).thenReturn(1);
@@ -404,6 +416,9 @@ class MyBatisTaskStoreTest {
         ArgumentCaptor<ReliableTaskLogEntity> captor = ArgumentCaptor.forClass(ReliableTaskLogEntity.class);
         verify(taskLogMapper).insert(captor.capture());
         ReliableTaskLogEntity log = captor.getValue();
+        assertEquals(1, log.getAttemptNo());
+        assertEquals("RUNNING", log.getStatusBefore());
+        assertEquals("RETRYING", log.getStatusAfter());
         assertEquals("RetryableException", log.getErrorCode());
         assertEquals("temporary failure", log.getErrorMsg());
         assertEquals("worker-1", log.getWorkerId());
@@ -491,12 +506,18 @@ class MyBatisTaskStoreTest {
         ReliableTaskLogEntity logEntity = new ReliableTaskLogEntity();
         logEntity.setId(100L);
         logEntity.setTaskId(1L);
+        logEntity.setAttemptNo(2);
+        logEntity.setStatusBefore("RUNNING");
+        logEntity.setStatusAfter("SUCCESS");
         logEntity.setStatus(TaskStatus.SUCCESS.getCode());
         when(taskLogMapper.selectList(any())).thenReturn(List.of(logEntity));
 
         List<TaskLogVO> result = taskStore.getTaskLogs(1L);
 
         assertEquals(1, result.size());
+        assertEquals(2, result.get(0).getAttemptNo());
+        assertEquals("RUNNING", result.get(0).getStatusBefore());
+        assertEquals("SUCCESS", result.get(0).getStatusAfter());
         assertEquals("成功", result.get(0).getStatusDesc());
     }
 

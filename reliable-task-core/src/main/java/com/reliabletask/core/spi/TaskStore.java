@@ -94,6 +94,20 @@ public interface TaskStore {
     boolean claimTask(Long id, String workerId);
 
     /**
+     * 抢占任务（乐观锁），并指定本次执行锁的过期时间。
+     *
+     * <p>默认委托到旧接口，保持自定义存储实现的二进制兼容；支持锁 TTL 配置的存储实现应覆盖此方法。
+     *
+     * @param id           任务 ID
+     * @param workerId     当前 Worker ID
+     * @param lockExpireAt 本次锁过期时间
+     * @return true 表示抢占成功，false 表示已被其他 Worker 抢占
+     */
+    default boolean claimTask(Long id, String workerId, LocalDateTime lockExpireAt) {
+        return claimTask(id, workerId);
+    }
+
+    /**
      * 续约正在执行中的任务锁。
      *
      * <p>默认实现为 no-op，保持 V1.5 兼容；具体存储实现可覆盖。

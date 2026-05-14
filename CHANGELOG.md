@@ -6,6 +6,28 @@ This project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Add `TaskStateMachine` to centralize legal task status transitions.
+- Add `TaskExceptionFormatter` SPI and default compressed stack diagnostic formatter.
+- Add configurable worker claim lock TTL through `reliable-task.worker.lock-ttl-seconds`.
+- Add execution log trace fields: `attempt_no`, `status_before`, and `status_after`.
+- Add real Admin switches for audit-log endpoints and batch-operation endpoints.
+
+### Changed
+
+- Change project development version to `0.2.0-SNAPSHOT`.
+- Use `reliable-task.recovery.timeout-seconds` when building the timeout recovery threshold.
+- Enforce `TaskHandler.maxConcurrency()` with handler-level semaphores.
+- Cancel timed-out execution futures with interruption before scheduling retry/dead handling.
+
+### Fixed
+
+- Remove hard-coded initial task claim lock TTL.
+- Preserve execution attempt and before/after status values in task logs.
+- Avoid scheduler errors when custom stores return null task lists.
+- Use a unique create-time index name on `reliable_task_log` for H2/MySQL-mode DDL validation.
+
 ## [0.1.0] - 2026-05-05
 
 ### Added

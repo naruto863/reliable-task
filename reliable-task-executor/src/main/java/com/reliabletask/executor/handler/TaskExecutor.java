@@ -57,6 +57,7 @@ public class TaskExecutor {
     private final TaskAuditRecorder auditRecorder;
     private final TaskAlertService alertService;
     private final ScheduledExecutorService leaseRenewalExecutor;
+    private final ConcurrentMap<String, Semaphore> concurrencyLimiters = new ConcurrentHashMap<>();
 
     public TaskExecutor(TaskStore taskStore, TaskHandlerRegistry handlerRegistry,
                         TaskExecutorFactory executorFactory, RetryEngine retryEngine,
@@ -156,12 +157,24 @@ public class TaskExecutor {
 
                 Future<?> future = executor.submit(() -> {
                     interceptor.beforeExecute(task);
+                    Semaphore limiter = resolveConcurrencyLimiter(taskHandler);
+                    boolean acquired = false;
                     try {
+                        if (limiter != null) {
+                            limiter.acquire();
+                            acquired = true;
+                        }
                         Object typedPayload = deserializePayload(taskHandler, task);
                         taskHandler.execute(task, typedPayload);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new CompletionException(e);
                     } catch (Exception e) {
                         throw new CompletionException(e);
                     } finally {
+                        if (acquired) {
+                            limiter.release();
+                        }
                         interceptor.afterExecute();
                     }
                 });
@@ -169,6 +182,9 @@ public class TaskExecutor {
                 ScheduledFuture<?> leaseRenewal = startLeaseRenewal(task);
                 try {
                     future.get(timeoutMs, TimeUnit.MILLISECONDS);
+                } catch (TimeoutException e) {
+                    future.cancel(true);
+                    throw e;
                 } finally {
                     if (leaseRenewal != null) {
                         leaseRenewal.cancel(false);
@@ -221,6 +237,15 @@ public class TaskExecutor {
             return task.getPayload();
         }
         return payloadSerializer.deserialize(task.getPayload(), payloadType);
+    }
+
+    private Semaphore resolveConcurrencyLimiter(TaskHandler taskHandler) {
+        int maxConcurrency = taskHandler.maxConcurrency();
+        if (maxConcurrency <= 0) {
+            return null;
+        }
+        return concurrencyLimiters.computeIfAbsent(taskHandler.getTaskType(),
+                ignored -> new Semaphore(maxConcurrency));
     }
 
     private ScheduledFuture<?> startLeaseRenewal(TaskInstance task) {

@@ -26,6 +26,11 @@ public class WorkerProperties {
     private int batchSize = 10;
 
     /**
+     * 任务初始锁 TTL，单位秒，默认 300
+     */
+    private long lockTtlSeconds = 300L;
+
+    /**
      * 是否启用拉取前背压，默认 false 保持 V1.5 行为
      */
     private boolean backpressureEnabled = false;

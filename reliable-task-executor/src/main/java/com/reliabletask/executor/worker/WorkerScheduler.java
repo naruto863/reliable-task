@@ -57,7 +57,7 @@ public class WorkerScheduler {
         }
 
         List<TaskInstance> tasks = taskStore.fetchPendingTasks(fetchSize);
-        if (tasks.isEmpty()) {
+        if (tasks == null || tasks.isEmpty()) {
             return;
         }
 
@@ -67,7 +67,9 @@ public class WorkerScheduler {
         int claimedCount = 0;
         for (TaskInstance task : tasks) {
             try {
-                boolean claimed = taskStore.claimTask(task.getId(), workerId);
+                LocalDateTime lockExpireAt = LocalDateTime.now()
+                        .plusSeconds(Math.max(properties.getLockTtlSeconds(), 1L));
+                boolean claimed = taskStore.claimTask(task.getId(), workerId, lockExpireAt);
                 if (claimed) {
                     claimedCount++;
                     log.info("Worker {} claimed task: id={}, type={}, bizId={}",

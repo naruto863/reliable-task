@@ -1,6 +1,8 @@
 package com.reliabletask.starter.autoconfigure;
 
 import com.reliabletask.core.spi.AlarmNotifier;
+import com.reliabletask.core.diagnostics.DefaultTaskExceptionFormatter;
+import com.reliabletask.core.diagnostics.TaskExceptionFormatter;
 import com.reliabletask.core.spi.TaskStore;
 import com.reliabletask.core.spi.TaskTemplate;
 import com.reliabletask.core.spi.IdempotencyStrategy;
@@ -69,6 +71,7 @@ public class ReliableTaskExecutorAutoConfiguration {
         workerProps.setEnabled(wp.isEnabled());
         workerProps.setPollIntervalMs(wp.getPollIntervalMs());
         workerProps.setBatchSize(wp.getBatchSize());
+        workerProps.setLockTtlSeconds(wp.getLockTtlSeconds());
         workerProps.setBackpressureEnabled(wp.getBackpressure().isEnabled());
         workerProps.setBackpressureMinFetchSize(wp.getBackpressure().getMinFetchSize());
         workerProps.setBackpressureMaxFetchSize(wp.getBackpressure().getMaxFetchSize());
@@ -143,8 +146,15 @@ public class ReliableTaskExecutorAutoConfiguration {
     public RetryEngine retryEngine(TaskStore taskStore,
                                    TaskMetricsRecorder metricsRecorder,
                                    TaskAuditRecorder auditRecorder,
-                                   TaskAlertService alertService) {
-        return new RetryEngine(taskStore, metricsRecorder, auditRecorder, alertService);
+                                   TaskAlertService alertService,
+                                   TaskExceptionFormatter exceptionFormatter) {
+        return new RetryEngine(taskStore, metricsRecorder, auditRecorder, alertService, exceptionFormatter);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(TaskExceptionFormatter.class)
+    public TaskExceptionFormatter taskExceptionFormatter() {
+        return new DefaultTaskExceptionFormatter();
     }
 
     // ==================== 告警配置 ====================

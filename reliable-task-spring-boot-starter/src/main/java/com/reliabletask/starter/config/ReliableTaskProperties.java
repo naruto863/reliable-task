@@ -20,6 +20,7 @@ import java.util.Map;
  *     enabled: true
  *     poll-interval-ms: 5000
  *     batch-size: 10
+ *     lock-ttl-seconds: 300
  *     backpressure:
  *       enabled: false
  *       min-fetch-size: 1
@@ -136,6 +137,11 @@ public class ReliableTaskProperties {
          * 单次拉取任务数量，默认 10
          */
         private int batchSize = 10;
+
+        /**
+         * Worker 抢占任务后的初始锁 TTL，单位秒，默认 300
+         */
+        private long lockTtlSeconds = 300L;
 
         /**
          * Worker 背压配置

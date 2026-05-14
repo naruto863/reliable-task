@@ -6,13 +6,13 @@ recovers timed-out executions, and exposes admin APIs for operational visibility
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-[![Java](https://img.shields.io/badge/Java-21+-blue.svg)](https://openjdk.org/projects/jdk/21/)
+[![Java](https://img.shields.io/badge/Java-17+-blue.svg)](https://openjdk.org/projects/jdk/17/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2.5-brightgreen.svg)](https://spring.io/projects/spring-boot)
 [![MyBatis-Plus](https://img.shields.io/badge/MyBatis--Plus-3.5.6-orange.svg)](https://baomidou.com/)
 [![CI](https://github.com/naruto863/reliable-task/actions/workflows/ci.yml/badge.svg)](https://github.com/naruto863/reliable-task/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-> ReliableTask `v0.1.0` is the first public preview release. APIs, configuration, and database schema may evolve before `v1.0.0`.
+> ReliableTask is currently on `0.2.0-SNAPSHOT`. The first public preview is `v0.1.0`; APIs, configuration, and database schema may evolve before `v1.0.0`.
 
 ## Table of Contents
 
@@ -45,10 +45,12 @@ write the business record and the task record in one transaction, then let worke
 | --- | --- |
 | Transactional task submission | Submit reliable asynchronous tasks in the same transaction as business data. |
 | Database-backed lifecycle | Store task state, logs, worker heartbeat, audit logs, and batch operation records in MySQL. |
+| Explicit state machine | Centralize legal transitions such as `PENDING/RETRYING -> RUNNING -> SUCCESS/RETRYING/DEAD/CANCELLED`. |
 | Retry strategies | Use fixed interval or exponential backoff retry policies, with handler-level overrides. |
-| Timeout recovery | Detect timed-out running tasks and reset them after worker crashes or abnormal exits. |
-| Thread pool isolation | Configure task-type-specific pools to isolate slow or high-risk workloads. |
+| Timeout and lock control | Configure claim lock TTL, recover expired running tasks, and interrupt timed-out handler futures. |
+| Thread pool and handler isolation | Configure task-type-specific pools and enforce `TaskHandler.maxConcurrency()`. |
 | Idempotency SPI | Control duplicate submission and duplicate execution behavior through pluggable strategies. |
+| Failure diagnostics | Format error codes, summaries, and compressed stack traces through an exception formatter SPI. |
 | Admin APIs | Query tasks, view logs and stats, retry, requeue, cancel, update payloads, and inspect workers. |
 | Spring Boot starter | Enable store, executor, admin APIs, metrics, serializer, idempotency, and worker settings through auto-configuration. |
 
@@ -93,7 +95,7 @@ Execution flow:
 
 | Tool | Version |
 | --- | --- |
-| Java | 21+ |
+| Java | 17+ |
 | Maven | 3.8+ |
 | Spring Boot | 3.2.5 |
 | MyBatis-Plus | 3.5.6 |
@@ -160,7 +162,7 @@ More demo requests are documented in [reliable-task-demo/README.md](reliable-tas
 
 ## Installation
 
-ReliableTask `v0.1.0` is not published to Maven Central yet. For this preview release, use a source build, local Maven installation, or a private Maven repository.
+ReliableTask `0.2.0-SNAPSHOT` is not published to Maven Central yet. For this preview release, use a source build, local Maven installation, or a private Maven repository.
 
 ```bash
 mvn -B -DskipTests install
@@ -172,7 +174,7 @@ Then depend on the Spring Boot starter:
 <dependency>
     <groupId>com.reliabletask</groupId>
     <artifactId>reliable-task-spring-boot-starter</artifactId>
-    <version>0.1.0</version>
+    <version>0.2.0-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -189,10 +191,16 @@ reliable-task:
   enabled: true
   worker:
     enabled: true
+    lock-ttl-seconds: 300
   recovery:
     enabled: true
+    timeout-seconds: 300
   admin:
     enabled: true
+    audit:
+      enabled: false
+    batch:
+      enabled: false
 ```
 
 ### Implement a TaskHandler
@@ -247,13 +255,15 @@ ReliableTask properties use the `reliable-task` prefix.
 | `reliable-task.worker.enabled` | `true` | Enables worker polling and execution. |
 | `reliable-task.worker.poll-interval-ms` | `5000` | Worker polling interval. |
 | `reliable-task.worker.batch-size` | `10` | Number of tasks fetched per polling batch. |
+| `reliable-task.worker.lock-ttl-seconds` | `300` | Initial lock TTL after a worker claims a task. |
 | `reliable-task.recovery.enabled` | `true` | Enables timeout recovery scans. |
+| `reliable-task.recovery.timeout-seconds` | `300` | Grace threshold used by timeout recovery scans. |
 | `reliable-task.metrics.enabled` | `false` | Enables Micrometer metrics recording. |
 | `reliable-task.alert.enabled` | `false` | Enables alert scanning. |
 | `reliable-task.admin.enabled` | `true` | Enables admin APIs. |
 | `reliable-task.admin.auth.enabled` | `false` | Enables admin authorization SPI checks. |
-| `reliable-task.admin.audit.enabled` | `false` | Enables admin operation auditing. |
-| `reliable-task.admin.batch.enabled` | `false` | Enables limited batch operation APIs. |
+| `reliable-task.admin.audit.enabled` | `false` | Enables admin operation auditing and audit-log query endpoints. |
+| `reliable-task.admin.batch.enabled` | `false` | Enables limited batch operation APIs. Disabled endpoints return 404. |
 
 See [application-example.yml](reliable-task-demo/src/main/resources/application-example.yml) for a runnable demo configuration.
 
@@ -290,7 +300,7 @@ The repository keeps only `.env.example` and `application-example.yml` with plac
 No. Do not expose admin write APIs directly to the public internet.
 Production deployments must add authentication, authorization, audit logging, network access control, and monitoring.
 
-### Is `v0.1.0` available on Maven Central?
+### Is the current preview available on Maven Central?
 
 Not yet. Use a source build, local Maven installation, or a private Maven repository for the preview release.
 
@@ -302,10 +312,10 @@ Breaking changes, security fixes, and migration notes should be recorded in [CHA
 ## Release
 
 - Versioning follows SemVer.
-- Git tags use `vX.Y.Z`, for example `v0.1.0`.
+- Git tags use `vX.Y.Z`, for example `v0.2.0`.
 - Release notes are maintained in [CHANGELOG.md](CHANGELOG.md) and [docs/releases](docs/releases).
 - The release process is documented in [docs/release-process.md](docs/release-process.md).
-- The first public preview release is `v0.1.0`.
+- The first public preview release is `v0.1.0`; current development is `0.2.0-SNAPSHOT`.
 
 ## Contributing
 

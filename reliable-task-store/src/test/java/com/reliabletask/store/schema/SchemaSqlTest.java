@@ -4,6 +4,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -19,6 +21,7 @@ class SchemaSqlTest {
 
     private static final String[] TASK_V2_TABLES = {
             "reliable_task",
+            "reliable_task_log",
             "reliable_task_worker",
             "reliable_task_audit_log",
             "reliable_task_batch_operation"
@@ -34,6 +37,9 @@ class SchemaSqlTest {
             assertTableExists(connection, "reliable_task_worker");
             assertTableExists(connection, "reliable_task_audit_log");
             assertTableExists(connection, "reliable_task_batch_operation");
+            assertColumnExists(connection, "reliable_task_log", "attempt_no");
+            assertColumnExists(connection, "reliable_task_log", "status_before");
+            assertColumnExists(connection, "reliable_task_log", "status_after");
             assertIndexExists(connection, "idx_status_finish_time");
             assertIndexExists(connection, "idx_worker_heartbeat");
             assertIndexExists(connection, "idx_audit_target");
@@ -54,9 +60,12 @@ class SchemaSqlTest {
     }
 
     private String readSchemaSql() throws Exception {
-        try (InputStream inputStream = Objects.requireNonNull(
-                getClass().getClassLoader().getResourceAsStream("db/schema.sql"),
-                "db/schema.sql resource is missing")) {
+        InputStream resource = getClass().getClassLoader().getResourceAsStream("db/schema.sql");
+        if (resource == null) {
+            Path sourceSchema = Path.of("src", "main", "resources", "db", "schema.sql");
+            return Files.readString(sourceSchema, StandardCharsets.UTF_8);
+        }
+        try (InputStream inputStream = resource) {
             return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
         }
     }
@@ -74,6 +83,12 @@ class SchemaSqlTest {
     private void assertTableExists(Connection connection, String tableName) throws SQLException {
         try (ResultSet tables = connection.getMetaData().getTables(null, null, tableName, null)) {
             assertTrue(tables.next(), "Expected table to exist: " + tableName);
+        }
+    }
+
+    private void assertColumnExists(Connection connection, String tableName, String columnName) throws SQLException {
+        try (ResultSet columns = connection.getMetaData().getColumns(null, null, tableName, columnName)) {
+            assertTrue(columns.next(), "Expected column to exist: " + tableName + "." + columnName);
         }
     }
 

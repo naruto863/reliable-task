@@ -23,6 +23,21 @@ public class TaskLogVO {
     private Long taskId;
 
     /**
+     * 本次执行序号
+     */
+    private Integer attemptNo;
+
+    /**
+     * 执行前任务状态
+     */
+    private String statusBefore;
+
+    /**
+     * 执行后任务状态
+     */
+    private String statusAfter;
+
+    /**
      * 执行时间
      */
     private LocalDateTime executeTime;

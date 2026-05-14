@@ -43,10 +43,11 @@ public class TaskRecoveryScheduler {
             return;
         }
 
-        LocalDateTime timeoutThreshold = LocalDateTime.now();
+        LocalDateTime timeoutThreshold = LocalDateTime.now()
+                .minusSeconds(Math.max(properties.getTimeoutSeconds(), 0L));
         List<TaskInstance> timeoutTasks = taskStore.findTimeoutTasks(timeoutThreshold);
 
-        if (timeoutTasks.isEmpty()) {
+        if (timeoutTasks == null || timeoutTasks.isEmpty()) {
             return;
         }
 

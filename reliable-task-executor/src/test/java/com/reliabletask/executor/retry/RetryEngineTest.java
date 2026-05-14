@@ -1,6 +1,8 @@
 package com.reliabletask.executor.retry;
 
 import com.reliabletask.core.annotation.TaskRetryable;
+import com.reliabletask.core.diagnostics.TaskExceptionFormatter;
+import com.reliabletask.core.diagnostics.TaskFailureDiagnostic;
 import com.reliabletask.core.enums.RetryStrategyType;
 import com.reliabletask.core.exception.NonRetryableException;
 import com.reliabletask.core.exception.RetryableException;
@@ -99,6 +101,28 @@ class RetryEngineTest {
         verify(auditRecorder).record(argThat(audit ->
                 "SYSTEM_NON_RETRYABLE_DEAD".equals(audit.getOperationType())));
         verify(alertService).notifyDead(eq(task), contains("non-retryable"));
+    }
+
+    @Test
+    @DisplayName("handleFailure - 使用异常格式化 SPI 写入诊断信息")
+    void handleFailure_usesExceptionFormatterDiagnostic() {
+        TaskAlertService alertService = mock(TaskAlertService.class);
+        TaskExceptionFormatter formatter = error ->
+                new TaskFailureDiagnostic("REMOTE_TIMEOUT", "masked summary", "compressed stack");
+        retryEngine = new RetryEngine(taskStore, metricsRecorder, auditRecorder, alertService, formatter);
+        TaskInstance task = TaskInstance.builder()
+                .id(21L).taskType("TYPE_A").bizId("BIZ-21")
+                .executeCount(1).maxRetryCount(0)
+                .build();
+
+        retryEngine.handleFailure(new DefaultHandler(), task,
+                new RuntimeException("raw internal message"), 200L, "RUNNING");
+
+        verify(taskStore).markDead(21L, "REMOTE_TIMEOUT", "masked summary");
+        verify(taskStore).saveLog(eq(21L), eq(1), eq("RUNNING"), eq("DEAD"),
+                eq(false), eq(200L), eq("REMOTE_TIMEOUT"), eq("compressed stack"), isNull(), isNull());
+        verify(metricsRecorder).record(argThat(event ->
+                "REMOTE_TIMEOUT".equals(event.getErrorCode())));
     }
 
     @Test

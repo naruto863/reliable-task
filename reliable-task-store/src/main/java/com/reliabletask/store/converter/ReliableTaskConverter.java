@@ -195,6 +195,9 @@ public class ReliableTaskConverter {
         TaskLogVO vo = new TaskLogVO();
         vo.setId(entity.getId());
         vo.setTaskId(entity.getTaskId());
+        vo.setAttemptNo(entity.getAttemptNo());
+        vo.setStatusBefore(entity.getStatusBefore());
+        vo.setStatusAfter(entity.getStatusAfter());
         vo.setExecuteTime(entity.getExecuteTime());
         vo.setDurationMs(entity.getDurationMs());
         vo.setStatus(entity.getStatus());

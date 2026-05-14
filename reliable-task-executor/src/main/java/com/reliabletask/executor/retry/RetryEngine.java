@@ -1,6 +1,9 @@
 package com.reliabletask.executor.retry;
 
 import com.reliabletask.core.exception.NonRetryableException;
+import com.reliabletask.core.diagnostics.DefaultTaskExceptionFormatter;
+import com.reliabletask.core.diagnostics.TaskExceptionFormatter;
+import com.reliabletask.core.diagnostics.TaskFailureDiagnostic;
 import com.reliabletask.core.enums.TaskStatus;
 import com.reliabletask.core.model.AuditLog;
 import com.reliabletask.core.model.TaskInstance;
@@ -51,6 +54,7 @@ public class RetryEngine {
     private final TaskMetricsRecorder metricsRecorder;
     private final TaskAuditRecorder auditRecorder;
     private final TaskAlertService alertService;
+    private final TaskExceptionFormatter exceptionFormatter;
 
     public RetryEngine(TaskStore taskStore) {
         this(taskStore, new NoopTaskMetricsRecorder(), new NoopTaskAuditRecorder());
@@ -66,10 +70,21 @@ public class RetryEngine {
                        TaskMetricsRecorder metricsRecorder,
                        TaskAuditRecorder auditRecorder,
                        TaskAlertService alertService) {
+        this(taskStore, metricsRecorder, auditRecorder, alertService, new DefaultTaskExceptionFormatter());
+    }
+
+    public RetryEngine(TaskStore taskStore,
+                       TaskMetricsRecorder metricsRecorder,
+                       TaskAuditRecorder auditRecorder,
+                       TaskAlertService alertService,
+                       TaskExceptionFormatter exceptionFormatter) {
         this.taskStore = taskStore;
         this.metricsRecorder = metricsRecorder != null ? metricsRecorder : new NoopTaskMetricsRecorder();
         this.auditRecorder = auditRecorder != null ? auditRecorder : new NoopTaskAuditRecorder();
         this.alertService = alertService != null ? alertService : new NoopTaskAlertService();
+        this.exceptionFormatter = exceptionFormatter != null
+                ? exceptionFormatter
+                : new DefaultTaskExceptionFormatter();
     }
 
     /**
@@ -114,22 +129,25 @@ public class RetryEngine {
      */
     private void markDead(TaskInstance task, Throwable error, long durationMs,
                           String statusBefore, boolean retriesExhausted) {
-        String errorCode = error.getClass().getSimpleName();
-        taskStore.markDead(task.getId(), errorCode, truncate(error.getMessage(), 2000));
+        TaskFailureDiagnostic diagnostic = exceptionFormatter.format(error);
+        String errorCode = diagnostic.getErrorCode();
+        String errorMessage = diagnostic.getErrorMessage();
+        String logMessage = diagnostic.getStackTrace() != null ? diagnostic.getStackTrace() : errorMessage;
+        taskStore.markDead(task.getId(), errorCode, truncate(errorMessage, 2000));
         taskStore.saveLog(task.getId(), task.getExecuteCount(),
                 statusBefore, "DEAD", false, durationMs,
-                errorCode, truncate(error.getMessage(), 4000),
+                errorCode, truncate(logMessage, 4000),
                 task.getWorkerId(), task.getTraceId());
         log.warn("Task marked DEAD: id={}, type={}, bizId={}, reason={}, exhausted={}",
                 task.getId(), task.getTaskType(), task.getBizId(),
-                error.getMessage(), retriesExhausted);
+                errorMessage, retriesExhausted);
         recordMetrics(task, TaskStatus.DEAD, durationMs, false, errorCode);
         recordAudit(task,
                 retriesExhausted ? "SYSTEM_RETRY_EXHAUSTED" : "SYSTEM_NON_RETRYABLE_DEAD",
                 "SUCCESS",
-                error.getMessage());
-        notifyDead(task, retriesExhausted ? "max retry exceeded: " + error.getMessage()
-                : "non-retryable exception: " + error.getMessage());
+                errorMessage);
+        notifyDead(task, retriesExhausted ? "max retry exceeded: " + errorMessage
+                : "non-retryable exception: " + errorMessage);
     }
 
     /**
@@ -148,16 +166,19 @@ public class RetryEngine {
         );
         LocalDateTime nextExecuteTime = LocalDateTime.now().plus(Duration.ofMillis(delayMs));
 
-        String errorCode = error.getClass().getSimpleName();
-        taskStore.markWaitRetry(task.getId(), errorCode, truncate(error.getMessage(), 2000), nextExecuteTime);
+        TaskFailureDiagnostic diagnostic = exceptionFormatter.format(error);
+        String errorCode = diagnostic.getErrorCode();
+        String errorMessage = diagnostic.getErrorMessage();
+        String logMessage = diagnostic.getStackTrace() != null ? diagnostic.getStackTrace() : errorMessage;
+        taskStore.markWaitRetry(task.getId(), errorCode, truncate(errorMessage, 2000), nextExecuteTime);
         taskStore.saveLog(task.getId(), task.getExecuteCount(),
                 statusBefore, "RETRYING", false, durationMs,
-                errorCode, truncate(error.getMessage(), 4000),
+                errorCode, truncate(logMessage, 4000),
                 task.getWorkerId(), task.getTraceId());
         log.info("Task marked RETRYING: id={}, type={}, bizId={}, nextExecuteTime={}, delay={}ms",
                 task.getId(), task.getTaskType(), task.getBizId(), nextExecuteTime, delayMs);
         recordMetrics(task, TaskStatus.RETRYING, durationMs, false, errorCode);
-        recordAudit(task, "SYSTEM_RETRY_SCHEDULED", "SUCCESS", error.getMessage());
+        recordAudit(task, "SYSTEM_RETRY_SCHEDULED", "SUCCESS", errorMessage);
     }
 
     private void recordMetrics(TaskInstance task, TaskStatus status, long durationMs,

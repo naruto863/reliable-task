@@ -40,6 +40,8 @@ public class ReliableTaskAdminAutoConfiguration {
         return new TaskAdminController(taskStore,
                 properties.getAdmin().getAuth().isEnabled(),
                 authorizationProvider.getIfAvailable(),
-                properties.getWorker().getHeartbeat().getStaleWorkerThresholdSeconds());
+                properties.getWorker().getHeartbeat().getStaleWorkerThresholdSeconds(),
+                properties.getAdmin().getAudit().isEnabled(),
+                properties.getAdmin().getBatch().isEnabled());
     }
 }

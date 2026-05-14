@@ -30,6 +30,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 @DisplayName("TaskAdminController 测试")
@@ -156,6 +157,30 @@ class TaskAdminControllerTest {
     }
 
     @Test
+    @DisplayName("audit disabled - 写操作成功时不写入审计")
+    void auditDisabled_writeOperationSkipsAudit() {
+        controller = new TaskAdminController(taskStore, false, null, 60L, false, true);
+        when(taskStore.cancelTask(1L)).thenReturn(true);
+
+        Result<Boolean> result = controller.cancel(1L, "admin", "trace-1");
+
+        assertEquals(200, result.getCode());
+        verify(taskStore).cancelTask(1L);
+        verify(taskStore, never()).saveAuditLog(any(AuditLog.class));
+    }
+
+    @Test
+    @DisplayName("audit disabled - 审计查询接口返回 404")
+    void auditDisabled_auditQueryReturnsNotFound() {
+        controller = new TaskAdminController(taskStore, false, null, 60L, false, true);
+
+        Result<List<AuditLog>> result = controller.getAuditLogsByTaskId(1L, "auditor");
+
+        assertEquals(404, result.getCode());
+        verify(taskStore, never()).getAuditLogsByTaskId(1L);
+    }
+
+    @Test
     @DisplayName("getAuditLogsByTaskId - 返回任务审计日志")
     void getAuditLogsByTaskId_returnsLogs() {
         List<AuditLog> logs = List.of(AuditLog.builder().taskId(1L).operationType("TASK_CANCEL").build());
@@ -272,6 +297,19 @@ class TaskAdminControllerTest {
         assertEquals(1, result.getData().getFailCount());
         verify(taskStore).updateBatchOperationResult(any(BatchOperationResult.class));
         verify(taskStore).saveAuditLog(any(AuditLog.class));
+    }
+
+    @Test
+    @DisplayName("batch disabled - 批量操作接口返回 404")
+    void batchDisabled_returnsNotFound() {
+        controller = new TaskAdminController(taskStore, false, null, 60L, true, false);
+
+        Result<BatchOperationResult> result = controller.batchRequeue(
+                new TaskAdminController.BatchOperationRequest("TYPE_A", null, null, null, 10, false),
+                "ops", "trace-batch");
+
+        assertEquals(404, result.getCode());
+        verify(taskStore, never()).findOperableTaskIds(any(), any(), any(), any(), anyInt());
     }
 
     @Test
