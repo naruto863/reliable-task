@@ -266,3 +266,10 @@ venv.bak/
 
 # Temporary files
 *.temp
+
+############################
+# 本地 Agent / Review 产物
+############################
+docs/review/
+.config/gh/
+plans/codex_app/
