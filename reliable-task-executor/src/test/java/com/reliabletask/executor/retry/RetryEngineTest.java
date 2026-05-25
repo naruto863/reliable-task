@@ -120,7 +120,7 @@ class RetryEngineTest {
 
         verify(taskStore).markDead(21L, "REMOTE_TIMEOUT", "masked summary");
         verify(taskStore).saveLog(eq(21L), eq(1), eq("RUNNING"), eq("DEAD"),
-                eq(false), eq(200L), eq("REMOTE_TIMEOUT"), eq("compressed stack"), isNull(), isNull());
+                eq(false), eq(200L), eq("REMOTE_TIMEOUT"), eq("masked summary"), isNull(), isNull());
         verify(metricsRecorder).record(argThat(event ->
                 "REMOTE_TIMEOUT".equals(event.getErrorCode())));
     }

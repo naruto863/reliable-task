@@ -132,7 +132,7 @@ public class RetryEngine {
         TaskFailureDiagnostic diagnostic = exceptionFormatter.format(error);
         String errorCode = diagnostic.getErrorCode();
         String errorMessage = diagnostic.getErrorMessage();
-        String logMessage = diagnostic.getStackTrace() != null ? diagnostic.getStackTrace() : errorMessage;
+        String logMessage = errorMessage;
         taskStore.markDead(task.getId(), errorCode, truncate(errorMessage, 2000));
         taskStore.saveLog(task.getId(), task.getExecuteCount(),
                 statusBefore, "DEAD", false, durationMs,
@@ -169,7 +169,7 @@ public class RetryEngine {
         TaskFailureDiagnostic diagnostic = exceptionFormatter.format(error);
         String errorCode = diagnostic.getErrorCode();
         String errorMessage = diagnostic.getErrorMessage();
-        String logMessage = diagnostic.getStackTrace() != null ? diagnostic.getStackTrace() : errorMessage;
+        String logMessage = errorMessage;
         taskStore.markWaitRetry(task.getId(), errorCode, truncate(errorMessage, 2000), nextExecuteTime);
         taskStore.saveLog(task.getId(), task.getExecuteCount(),
                 statusBefore, "RETRYING", false, durationMs,
