@@ -20,14 +20,14 @@ import org.springframework.beans.factory.ObjectProvider;
  * 不依赖业务应用扫描 com.reliabletask.admin 包。
  */
 @AutoConfiguration(after = {ReliableTaskAutoConfiguration.class, ReliableTaskStoreAutoConfiguration.class})
-@ConditionalOnProperty(prefix = "reliable-task.admin", name = "enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "reliable-task.admin", name = "enabled", havingValue = "true", matchIfMissing = false)
 @ConditionalOnClass(TaskAdminController.class)
 @ConditionalOnBean(TaskStore.class)
 public class ReliableTaskAdminAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(TaskAuthorizationProvider.class)
-    @ConditionalOnProperty(prefix = "reliable-task.admin.auth", name = "enabled", havingValue = "false", matchIfMissing = true)
+    @ConditionalOnProperty(prefix = "reliable-task.admin.auth", name = "enabled", havingValue = "false", matchIfMissing = false)
     public TaskAuthorizationProvider taskAuthorizationProvider() {
         return new NoopTaskAuthorizationProvider();
     }

@@ -340,9 +340,9 @@ public class ReliableTaskProperties {
     @Data
     public static class Admin {
         /**
-         * 是否启用管理后台，默认 true
+         * 是否启用管理后台，默认 false
          */
-        private boolean enabled = true;
+        private boolean enabled = false;
 
         /**
          * 管理后台端口，默认 9090
@@ -380,9 +380,9 @@ public class ReliableTaskProperties {
         @Data
         public static class Auth {
             /**
-             * 是否启用 Admin 权限检查，默认 false
+             * 是否启用 Admin 权限检查，默认 true
              */
-            private boolean enabled = false;
+            private boolean enabled = true;
         }
 
         @Data
