@@ -253,6 +253,21 @@ class TaskAdminControllerTest {
     }
 
     @Test
+    @DisplayName("auth - 开启但无 provider 时拒绝读操作并写审计")
+    void authEnabledWithoutProvider_rejectsReadOperation() {
+        controller = new TaskAdminController(taskStore, true, null);
+
+        Result<TaskDetailVO> result = controller.getTaskDetail(1L, "viewer");
+
+        assertEquals(403, result.getCode());
+        assertTrue(result.getMessage().contains("Forbidden"));
+        verify(taskStore, never()).getTaskDetail(1L);
+        ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
+        verify(taskStore).saveAuditLog(captor.capture());
+        assertEquals("AUTH_DENIED", captor.getValue().getOperationType());
+    }
+
+    @Test
     @DisplayName("auth - provider 允许时执行写操作")
     void authProviderAllows_executesWriteOperation() {
         TaskAuthorizationProvider provider = (operator, action, taskId) -> true;
