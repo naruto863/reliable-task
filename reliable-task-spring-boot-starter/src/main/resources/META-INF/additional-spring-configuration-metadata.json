@@ -25,6 +25,12 @@
       "defaultValue": 10
     },
     {
+      "name": "reliable-task.worker.max-batch-size",
+      "type": "java.lang.Integer",
+      "description": "Upper bound for Worker batch-size. Values above this limit are clamped before polling.",
+      "defaultValue": 1000
+    },
+    {
       "name": "reliable-task.worker.backpressure.enabled",
       "type": "java.lang.Boolean",
       "description": "Whether Worker backpressure is enabled. Disabled by default to preserve V1.5 polling behavior.",
@@ -81,7 +87,7 @@
     {
       "name": "reliable-task.recovery.timeout-seconds",
       "type": "java.lang.Long",
-      "description": "Compatibility timeout setting in seconds. V1.5 recovery uses lock_expire_at; this value remains for existing configurations.",
+      "description": "Compatibility timeout setting in seconds. Recovery now resets RUNNING tasks whose lock_expire_at is less than or equal to the current time; this value is retained for existing configurations and future grace-period support.",
       "defaultValue": 300
     },
     {
@@ -121,6 +127,18 @@
       "defaultValue": false
     },
     {
+      "name": "reliable-task.metrics.include-worker-id-tag",
+      "type": "java.lang.Boolean",
+      "description": "Whether execution metrics include worker_id tags. Disabled by default to avoid high-cardinality time series.",
+      "defaultValue": false
+    },
+    {
+      "name": "reliable-task.metrics.stats-cache-ttl-ms",
+      "type": "java.lang.Long",
+      "description": "Cache TTL in milliseconds for task stats gauges to avoid querying task stats repeatedly during one scrape.",
+      "defaultValue": 5000
+    },
+    {
       "name": "reliable-task.alert.enabled",
       "type": "java.lang.Boolean",
       "description": "Whether ReliableTask alarm triggering is enabled.",
@@ -157,34 +175,76 @@
       "defaultValue": "STRICT_UNIQUE"
     },
     {
+      "name": "reliable-task.retry.exponential-multiplier",
+      "type": "java.lang.Double",
+      "description": "Multiplier used by the built-in EXPONENTIAL retry strategy.",
+      "defaultValue": 2.0
+    },
+    {
+      "name": "reliable-task.retry.jitter-ratio",
+      "type": "java.lang.Double",
+      "description": "Jitter ratio for the built-in EXPONENTIAL retry strategy. 0 disables jitter; valid range is 0 to 1.",
+      "defaultValue": 0.0
+    },
+    {
+      "name": "reliable-task.retry.min-delay-ms",
+      "type": "java.lang.Long",
+      "description": "Minimum retry delay in milliseconds applied by RetryEngine after strategy calculation.",
+      "defaultValue": 0
+    },
+    {
+      "name": "reliable-task.retry.max-delay-ms",
+      "type": "java.lang.Long",
+      "description": "Default maximum retry delay in milliseconds when @TaskRetryable.maxDelayMs is not set.",
+      "defaultValue": 300000
+    },
+    {
       "name": "reliable-task.serializer.type",
       "type": "java.lang.String",
-      "description": "Default task payload serializer type.",
+      "description": "Reserved serializer type setting. The current auto-configuration always registers JacksonTaskPayloadSerializer unless users provide their own TaskPayloadSerializer bean.",
       "defaultValue": "JACKSON"
     },
     {
       "name": "reliable-task.store.table-prefix",
       "type": "java.lang.String",
-      "description": "Reserved table prefix setting for storage implementations.",
+      "description": "Reserved table prefix setting. The current MyBatis implementation uses fixed reliable_task table names and does not apply this value.",
       "defaultValue": ""
     },
     {
       "name": "reliable-task.admin.enabled",
       "type": "java.lang.Boolean",
-      "description": "Whether ReliableTask Admin REST APIs are enabled.",
+      "description": "Whether ReliableTask Admin REST APIs are registered. Write operations are controlled separately by reliable-task.admin.write-enabled.",
       "defaultValue": true
+    },
+    {
+      "name": "reliable-task.admin.write-enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether Admin write operations such as retry, cancel, requeue, payload update, and batch operations are enabled. Disabled by default for safer starter adoption.",
+      "defaultValue": false
     },
     {
       "name": "reliable-task.admin.port",
       "type": "java.lang.Integer",
-      "description": "Reserved Admin port setting for future separated management server support.",
+      "description": "Reserved Admin port setting. The current Admin APIs run on the application server port.",
       "defaultValue": 9090
     },
     {
       "name": "reliable-task.admin.context-path",
       "type": "java.lang.String",
-      "description": "Reserved Admin context path setting. V1.5 REST API path remains /api/reliable-task.",
+      "description": "Reserved Admin context path setting. The current REST API path remains /api/reliable-task.",
       "defaultValue": "/reliable-task"
+    },
+    {
+      "name": "reliable-task.admin.max-page-size",
+      "type": "java.lang.Integer",
+      "description": "Upper bound for Admin list page sizes. Requests above this limit are clamped.",
+      "defaultValue": 200
+    },
+    {
+      "name": "reliable-task.admin.max-batch-limit",
+      "type": "java.lang.Integer",
+      "description": "Upper bound for Admin batch operation limits. Requests above this limit are clamped.",
+      "defaultValue": 1000
     },
     {
       "name": "reliable-task.admin.audit.enabled",

@@ -58,6 +58,15 @@ public class TaskSubmitRequest {
     private String idempotencyStrategy;
 
     /**
+     * 显式投递幂等键（可选）。
+     *
+     * <p>为空时默认使用 taskType:bizType:bizId 生成幂等键。
+     * 该值会写入 bizUniqueKey，长度不能超过 schema 中的 256 字符。
+     * 不建议放入手机号、身份证、Token 等敏感原文。
+     */
+    private String idempotencyKey;
+
+    /**
      * 优先级（可选，默认 5）
      * 0-9，数字越小优先级越高
      */

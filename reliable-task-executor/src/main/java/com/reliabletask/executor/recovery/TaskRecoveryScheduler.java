@@ -1,8 +1,12 @@
 package com.reliabletask.executor.recovery;
 
+import com.reliabletask.core.enums.TaskEventType;
+import com.reliabletask.core.enums.TaskStatus;
+import com.reliabletask.core.event.TaskEventPublisher;
+import com.reliabletask.core.model.TaskEvent;
+import com.reliabletask.core.model.TaskExecutionLease;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.spi.TaskStore;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 
@@ -25,11 +29,22 @@ import java.util.List;
  * <p>补偿扫描是防丢失的最后一道防线，确保任务最终能被重新消费。
  */
 @Slf4j
-@RequiredArgsConstructor
 public class TaskRecoveryScheduler {
 
     private final TaskStore taskStore;
     private final RecoveryProperties properties;
+    private final TaskEventPublisher eventPublisher;
+
+    public TaskRecoveryScheduler(TaskStore taskStore, RecoveryProperties properties) {
+        this(taskStore, properties, new TaskEventPublisher());
+    }
+
+    public TaskRecoveryScheduler(TaskStore taskStore, RecoveryProperties properties,
+                                 TaskEventPublisher eventPublisher) {
+        this.taskStore = taskStore;
+        this.properties = properties;
+        this.eventPublisher = eventPublisher != null ? eventPublisher : new TaskEventPublisher();
+    }
 
     /**
      * 定时补偿扫描
@@ -43,9 +58,14 @@ public class TaskRecoveryScheduler {
             return;
         }
 
-        LocalDateTime timeoutThreshold = LocalDateTime.now()
-                .minusSeconds(Math.max(properties.getTimeoutSeconds(), 0L));
-        List<TaskInstance> timeoutTasks = taskStore.findTimeoutTasks(timeoutThreshold);
+        int maxResetPerScan = Math.max(properties.getMaxResetPerScan(), 0);
+        if (maxResetPerScan <= 0) {
+            log.debug("Recovery skipped because maxResetPerScan is {}", maxResetPerScan);
+            return;
+        }
+
+        LocalDateTime timeoutThreshold = LocalDateTime.now();
+        List<TaskInstance> timeoutTasks = taskStore.findTimeoutTasks(timeoutThreshold, maxResetPerScan);
 
         if (timeoutTasks == null || timeoutTasks.isEmpty()) {
             return;
@@ -55,17 +75,19 @@ public class TaskRecoveryScheduler {
 
         int resetCount = 0;
         for (TaskInstance task : timeoutTasks) {
-            if (resetCount >= properties.getMaxResetPerScan()) {
+            if (resetCount >= maxResetPerScan) {
                 log.warn("Reached max reset limit ({}), remaining tasks will be handled in next scan",
-                        properties.getMaxResetPerScan());
+                        maxResetPerScan);
                 break;
             }
 
-            boolean success = taskStore.resetTimeoutTask(task.getId());
+            boolean success = taskStore.resetTimeoutTask(TaskExecutionLease.from(task));
             if (success) {
                 resetCount++;
                 log.info("Recovered timeout task: id={}, type={}, bizId={}, lastUpdate={}",
                         task.getId(), task.getTaskType(), task.getBizId(), task.getUpdateTime());
+                eventPublisher.publish(TaskEvent.of(TaskEventType.RECOVERED, task,
+                        task.getStatus(), TaskStatus.PENDING, "timeout task recovered"));
             }
         }
 

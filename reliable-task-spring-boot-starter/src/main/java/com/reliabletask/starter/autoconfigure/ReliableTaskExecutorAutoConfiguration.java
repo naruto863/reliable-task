@@ -3,12 +3,17 @@ package com.reliabletask.starter.autoconfigure;
 import com.reliabletask.core.spi.AlarmNotifier;
 import com.reliabletask.core.diagnostics.DefaultTaskExceptionFormatter;
 import com.reliabletask.core.diagnostics.TaskExceptionFormatter;
+import com.reliabletask.core.classifier.DefaultFailureClassifier;
+import com.reliabletask.core.event.TaskEventPublisher;
+import com.reliabletask.core.spi.FailureClassifier;
 import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskEventListener;
 import com.reliabletask.core.spi.TaskTemplate;
 import com.reliabletask.core.spi.IdempotencyStrategy;
 import com.reliabletask.core.spi.TaskAuditRecorder;
 import com.reliabletask.core.spi.TaskMetricsRecorder;
 import com.reliabletask.core.spi.TaskPayloadSerializer;
+import com.reliabletask.core.spi.RetryStrategy;
 import com.reliabletask.core.spi.WorkerHeartbeatReporter;
 import com.reliabletask.core.spi.noop.NoopAlarmNotifier;
 import com.reliabletask.core.spi.noop.NoopTaskAuditRecorder;
@@ -25,6 +30,7 @@ import com.reliabletask.executor.handler.TaskHandlerRegistry;
 import com.reliabletask.executor.interceptor.TaskExecutionInterceptor;
 import com.reliabletask.executor.recovery.RecoveryProperties;
 import com.reliabletask.executor.retry.RetryEngine;
+import com.reliabletask.executor.retry.RetryProperties;
 import com.reliabletask.executor.recovery.TaskRecoveryScheduler;
 import com.reliabletask.executor.retry.RetryStrategyResolver;
 import com.reliabletask.executor.serializer.JacksonTaskPayloadSerializer;
@@ -35,8 +41,12 @@ import com.reliabletask.executor.worker.WorkerIdGenerator;
 import com.reliabletask.executor.worker.WorkerProperties;
 import com.reliabletask.executor.worker.WorkerScheduler;
 import com.reliabletask.starter.metrics.MicrometerTaskMetricsRecorder;
+import com.reliabletask.starter.metrics.MicrometerTaskEventListener;
 import com.reliabletask.starter.config.ReliableTaskProperties;
 import com.reliabletask.core.strategy.AllowAfterTerminalIdempotencyStrategy;
+import com.reliabletask.core.strategy.ExponentialRetryStrategy;
+import com.reliabletask.core.strategy.FixedRetryStrategy;
+import com.reliabletask.core.strategy.RetryStrategyRegistry;
 import com.reliabletask.core.strategy.StrictUniqueIdempotencyStrategy;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -71,6 +81,7 @@ public class ReliableTaskExecutorAutoConfiguration {
         workerProps.setEnabled(wp.isEnabled());
         workerProps.setPollIntervalMs(wp.getPollIntervalMs());
         workerProps.setBatchSize(wp.getBatchSize());
+        workerProps.setMaxBatchSize(wp.getMaxBatchSize());
         workerProps.setLockTtlSeconds(wp.getLockTtlSeconds());
         workerProps.setBackpressureEnabled(wp.getBackpressure().isEnabled());
         workerProps.setBackpressureMinFetchSize(wp.getBackpressure().getMinFetchSize());
@@ -86,8 +97,9 @@ public class ReliableTaskExecutorAutoConfiguration {
     @ConditionalOnMissingBean(WorkerScheduler.class)
     @ConditionalOnProperty(prefix = "reliable-task.worker", name = "enabled", havingValue = "true", matchIfMissing = true)
     public WorkerScheduler workerScheduler(TaskStore taskStore, WorkerProperties workerProperties,
-                                           TaskExecutor taskExecutor) {
-        return new WorkerScheduler(taskStore, workerProperties, taskExecutor);
+                                           TaskExecutor taskExecutor,
+                                           TaskEventPublisher eventPublisher) {
+        return new WorkerScheduler(taskStore, workerProperties, taskExecutor, eventPublisher);
     }
 
     // ==================== 补偿恢复配置 ====================
@@ -107,8 +119,9 @@ public class ReliableTaskExecutorAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(TaskRecoveryScheduler.class)
     @ConditionalOnProperty(prefix = "reliable-task.recovery", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public TaskRecoveryScheduler taskRecoveryScheduler(TaskStore taskStore, RecoveryProperties recoveryProperties) {
-        return new TaskRecoveryScheduler(taskStore, recoveryProperties);
+    public TaskRecoveryScheduler taskRecoveryScheduler(TaskStore taskStore, RecoveryProperties recoveryProperties,
+                                                       TaskEventPublisher eventPublisher) {
+        return new TaskRecoveryScheduler(taskStore, recoveryProperties, eventPublisher);
     }
 
     // ==================== 线程池配置 ====================
@@ -142,19 +155,60 @@ public class ReliableTaskExecutorAutoConfiguration {
     // ==================== 重试引擎 ====================
 
     @Bean
+    @ConditionalOnMissingBean(RetryProperties.class)
+    public RetryProperties retryProperties(ReliableTaskProperties properties) {
+        ReliableTaskProperties.Retry retry = properties.getRetry();
+        RetryProperties retryProperties = new RetryProperties();
+        retryProperties.setExponentialMultiplier(retry.getExponentialMultiplier());
+        retryProperties.setJitterRatio(retry.getJitterRatio());
+        retryProperties.setMinDelayMs(retry.getMinDelayMs());
+        retryProperties.setMaxDelayMs(retry.getMaxDelayMs());
+        return retryProperties;
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(RetryStrategyRegistry.class)
+    public RetryStrategyRegistry retryStrategyRegistry(RetryProperties retryProperties,
+                                                       List<RetryStrategy> retryStrategies) {
+        return new RetryStrategyRegistry(
+                new FixedRetryStrategy(),
+                new ExponentialRetryStrategy(
+                        retryProperties.getExponentialMultiplier(),
+                        retryProperties.getJitterRatio()),
+                retryStrategies);
+    }
+
+    @Bean
     @ConditionalOnMissingBean(RetryEngine.class)
     public RetryEngine retryEngine(TaskStore taskStore,
                                    TaskMetricsRecorder metricsRecorder,
                                    TaskAuditRecorder auditRecorder,
                                    TaskAlertService alertService,
-                                   TaskExceptionFormatter exceptionFormatter) {
-        return new RetryEngine(taskStore, metricsRecorder, auditRecorder, alertService, exceptionFormatter);
+                                   TaskExceptionFormatter exceptionFormatter,
+                                   RetryStrategyRegistry retryStrategyRegistry,
+                                   RetryProperties retryProperties,
+                                   FailureClassifier failureClassifier,
+                                   TaskEventPublisher eventPublisher) {
+        return new RetryEngine(taskStore, metricsRecorder, auditRecorder, alertService, exceptionFormatter,
+                retryStrategyRegistry, retryProperties, failureClassifier, eventPublisher);
     }
 
     @Bean
     @ConditionalOnMissingBean(TaskExceptionFormatter.class)
     public TaskExceptionFormatter taskExceptionFormatter() {
         return new DefaultTaskExceptionFormatter();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(FailureClassifier.class)
+    public FailureClassifier failureClassifier() {
+        return new DefaultFailureClassifier();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(TaskEventPublisher.class)
+    public TaskEventPublisher taskEventPublisher(List<TaskEventListener> listeners) {
+        return new TaskEventPublisher(listeners);
     }
 
     // ==================== 告警配置 ====================
@@ -215,8 +269,19 @@ public class ReliableTaskExecutorAutoConfiguration {
     @ConditionalOnProperty(prefix = "reliable-task.metrics", name = "enabled", havingValue = "true")
     public TaskMetricsRecorder micrometerTaskMetricsRecorder(MeterRegistry meterRegistry,
                                                              TaskStore taskStore,
-                                                             TaskExecutorFactory executorFactory) {
-        return new MicrometerTaskMetricsRecorder(meterRegistry, taskStore, executorFactory);
+                                                             TaskExecutorFactory executorFactory,
+                                                             ReliableTaskProperties properties) {
+        return new MicrometerTaskMetricsRecorder(meterRegistry, taskStore, executorFactory,
+                properties.getMetrics());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(MicrometerTaskEventListener.class)
+    @ConditionalOnClass(MeterRegistry.class)
+    @ConditionalOnBean(MeterRegistry.class)
+    @ConditionalOnProperty(prefix = "reliable-task.metrics", name = "enabled", havingValue = "true")
+    public MicrometerTaskEventListener micrometerTaskEventListener(MeterRegistry meterRegistry) {
+        return new MicrometerTaskEventListener(meterRegistry);
     }
 
     @Bean
@@ -257,10 +322,11 @@ public class ReliableTaskExecutorAutoConfiguration {
                                              WorkerProperties workerProperties,
                                              TaskMetricsRecorder metricsRecorder,
                                              TaskAuditRecorder auditRecorder,
-                                             TaskAlertService alertService) {
+                                             TaskAlertService alertService,
+                                             TaskEventPublisher eventPublisher) {
         return new TaskExecutor(taskStore, handlerRegistry, executorFactory, retryEngine,
                 new TaskExecutionInterceptor(), payloadSerializer, workerProperties,
-                metricsRecorder, auditRecorder, alertService);
+                metricsRecorder, auditRecorder, alertService, eventPublisher);
     }
 
     // ==================== 任务模板 ====================
@@ -283,8 +349,9 @@ public class ReliableTaskExecutorAutoConfiguration {
                                      List<IdempotencyStrategy> idempotencyStrategies,
                                      ReliableTaskProperties properties,
                                      TaskPayloadSerializer payloadSerializer,
-                                     TaskMetricsRecorder metricsRecorder) {
+                                     TaskMetricsRecorder metricsRecorder,
+                                     TaskEventPublisher eventPublisher) {
         return new TransactionAwareTaskTemplate(taskStore, idempotencyStrategies,
-                properties.getIdempotency().getStrategy(), payloadSerializer, metricsRecorder);
+                properties.getIdempotency().getStrategy(), payloadSerializer, metricsRecorder, eventPublisher);
     }
 }

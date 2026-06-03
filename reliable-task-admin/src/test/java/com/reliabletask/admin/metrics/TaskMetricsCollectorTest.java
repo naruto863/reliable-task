@@ -2,6 +2,7 @@ package com.reliabletask.admin.metrics;
 
 import com.reliabletask.core.enums.TaskStatus;
 import com.reliabletask.core.vo.TaskStatsVO;
+import com.reliabletask.store.entity.ReliableTaskEntity;
 import com.reliabletask.store.mapper.ReliableTaskMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -12,6 +13,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -44,6 +46,9 @@ class TaskMetricsCollectorTest {
                 .thenReturn(12L)  // todayNew
                 .thenReturn(8L)   // todaySuccess
                 .thenReturn(2L);  // todayFailed
+        ReliableTaskEntity oldest = new ReliableTaskEntity();
+        oldest.setCreateTime(LocalDateTime.now().minusMinutes(2));
+        when(taskMapper.selectOne(any())).thenReturn(oldest);
 
         TaskMetricsCollector collector = new TaskMetricsCollector(taskMapper);
         TaskStatsVO stats = collector.collectStats();
@@ -59,6 +64,7 @@ class TaskMetricsCollectorTest {
         assertEquals(12L, stats.getTodayNewTasks());
         assertEquals(8L, stats.getTodaySuccessTasks());
         assertEquals(2L, stats.getTodayFailedTasks());
+        assertEquals(true, stats.getOldestPendingAgeSeconds() >= 110L);
 
         assertEquals(2L, stats.getTaskTypeStats().get("CREATE_SHIPMENT"));
         assertEquals(1L, stats.getTaskTypeStats().get("SYNC_ORDER"));
@@ -84,6 +90,7 @@ class TaskMetricsCollectorTest {
                 ));
 
         when(taskMapper.selectCount(any())).thenReturn(1L, 0L, 0L);
+        when(taskMapper.selectOne(any())).thenReturn(null);
 
         TaskMetricsCollector collector = new TaskMetricsCollector(taskMapper);
         TaskStatsVO stats = collector.collectStats();
@@ -94,5 +101,6 @@ class TaskMetricsCollectorTest {
 
         assertEquals(1L, stats.getTaskTypeStats().get("TYPE-A"));
         assertFalse(stats.getTaskTypeStats().containsKey(null));
+        assertEquals(0L, stats.getOldestPendingAgeSeconds());
     }
 }

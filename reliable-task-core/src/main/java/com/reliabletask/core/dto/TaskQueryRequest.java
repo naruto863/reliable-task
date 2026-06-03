@@ -20,6 +20,10 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 public class TaskQueryRequest {
 
+    public static final int DEFAULT_PAGE_NUM = 1;
+    public static final int DEFAULT_PAGE_SIZE = 20;
+    public static final int DEFAULT_MAX_PAGE_SIZE = 200;
+
     /**
      * 任务状态筛选
      */
@@ -69,18 +73,36 @@ public class TaskQueryRequest {
      * 页码，从 1 开始
      */
     @Builder.Default
-    private Integer pageNum = 1;
+    private Integer pageNum = DEFAULT_PAGE_NUM;
 
     /**
      * 每页大小
      */
     @Builder.Default
-    private Integer pageSize = 20;
+    private Integer pageSize = DEFAULT_PAGE_SIZE;
+
+    /**
+     * 归一化页码，防止外部请求传入 0 或负数。
+     */
+    public int normalizedPageNum() {
+        return pageNum == null || pageNum <= 0 ? DEFAULT_PAGE_NUM : pageNum;
+    }
+
+    /**
+     * 归一化分页大小，防止外部请求传入 0、负数或过大值。
+     */
+    public int normalizedPageSize(int maxPageSize) {
+        int effectiveMaxPageSize = maxPageSize > 0 ? maxPageSize : DEFAULT_MAX_PAGE_SIZE;
+        if (pageSize == null || pageSize <= 0) {
+            return Math.min(DEFAULT_PAGE_SIZE, effectiveMaxPageSize);
+        }
+        return Math.min(pageSize, effectiveMaxPageSize);
+    }
 
     /**
      * 获取 MyBatis-Plus 分页偏移量
      */
     public long getOffset() {
-        return (long) (pageNum - 1) * pageSize;
+        return (long) (normalizedPageNum() - 1) * normalizedPageSize(DEFAULT_MAX_PAGE_SIZE);
     }
 }

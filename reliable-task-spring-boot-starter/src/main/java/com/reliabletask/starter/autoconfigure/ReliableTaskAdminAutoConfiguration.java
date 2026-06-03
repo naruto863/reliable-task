@@ -1,6 +1,7 @@
 package com.reliabletask.starter.autoconfigure;
 
 import com.reliabletask.admin.controller.TaskAdminController;
+import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.spi.TaskAuthorizationProvider;
 import com.reliabletask.core.spi.TaskStore;
 import com.reliabletask.core.spi.noop.NoopTaskAuthorizationProvider;
@@ -36,12 +37,17 @@ public class ReliableTaskAdminAutoConfiguration {
     @ConditionalOnMissingBean(TaskAdminController.class)
     public TaskAdminController taskAdminController(TaskStore taskStore,
                                                    ReliableTaskProperties properties,
-                                                   ObjectProvider<TaskAuthorizationProvider> authorizationProvider) {
+                                                   ObjectProvider<TaskAuthorizationProvider> authorizationProvider,
+                                                   ObjectProvider<TaskEventPublisher> eventPublisher) {
         return new TaskAdminController(taskStore,
                 properties.getAdmin().getAuth().isEnabled(),
                 authorizationProvider.getIfAvailable(),
                 properties.getWorker().getHeartbeat().getStaleWorkerThresholdSeconds(),
                 properties.getAdmin().getAudit().isEnabled(),
-                properties.getAdmin().getBatch().isEnabled());
+                properties.getAdmin().getBatch().isEnabled(),
+                properties.getAdmin().getMaxPageSize(),
+                properties.getAdmin().getMaxBatchLimit(),
+                properties.getAdmin().isWriteEnabled(),
+                eventPublisher.getIfAvailable(TaskEventPublisher::new));
     }
 }

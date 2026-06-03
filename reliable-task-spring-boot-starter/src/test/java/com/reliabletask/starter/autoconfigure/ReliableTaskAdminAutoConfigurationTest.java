@@ -12,7 +12,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @DisplayName("ReliableTaskAdminAutoConfiguration 测试")
 class ReliableTaskAdminAutoConfigurationTest {
@@ -31,7 +35,26 @@ class ReliableTaskAdminAutoConfigurationTest {
             assertThat(context).hasSingleBean(TaskAuthorizationProvider.class);
             assertThat(context).getBean(TaskAuthorizationProvider.class)
                     .isInstanceOf(NoopTaskAuthorizationProvider.class);
+            TaskAdminController controller = context.getBean(TaskAdminController.class);
+            TaskStore taskStore = context.getBean(TaskStore.class);
+            assertThat(controller.cancel(1L, "admin", "trace-1").getCode()).isEqualTo(404);
+            verify(taskStore, never()).cancelTask(anyLong());
         });
+    }
+
+    @Test
+    @DisplayName("admin write-enabled=true 时允许写接口进入 store")
+    void adminWriteEnabled_allowsWriteOperations() {
+        contextRunner
+                .withPropertyValues("reliable-task.admin.write-enabled=true")
+                .run(context -> {
+                    TaskAdminController controller = context.getBean(TaskAdminController.class);
+                    TaskStore taskStore = context.getBean(TaskStore.class);
+                    when(taskStore.cancelTask(1L)).thenReturn(true);
+
+                    assertThat(controller.cancel(1L, "admin", "trace-1").getCode()).isEqualTo(200);
+                    verify(taskStore).cancelTask(1L);
+                });
     }
 
     @Test

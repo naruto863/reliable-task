@@ -20,6 +20,7 @@ import java.util.Map;
  *     enabled: true
  *     poll-interval-ms: 5000
  *     batch-size: 10
+ *     max-batch-size: 1000
  *     lock-ttl-seconds: 300
  *     backpressure:
  *       enabled: false
@@ -39,8 +40,12 @@ import java.util.Map;
  *     window-seconds: 300
  *   idempotency:
  *     strategy: STRICT_UNIQUE
- *   serializer:
- *     type: JACKSON
+ *   retry:
+ *     exponential-multiplier: 2.0
+ *     jitter-ratio: 0.0
+ *     min-delay-ms: 0
+ *     max-delay-ms: 300000
+ *   # serializer.type is reserved; override TaskPayloadSerializer Bean to customize serialization.
  *   executor:
  *     default-core-size: 4
  *     default-max-size: 16
@@ -51,11 +56,13 @@ import java.util.Map;
  *         core-size: 8
  *         max-size: 16
  *         queue-capacity: 200
- *   store:
- *     table-prefix: reliable_
+ *   # store.table-prefix is reserved; current MyBatis implementation uses fixed table names.
  *   admin:
  *     enabled: true
- *     port: 9090
+ *     write-enabled: false
+ *     max-page-size: 200
+ *     max-batch-limit: 1000
+ *     # port/context-path are reserved; Admin APIs are served by the application server under /api/reliable-task.
  *     audit:
  *       enabled: false
  *     auth:
@@ -104,6 +111,11 @@ public class ReliableTaskProperties {
     private Idempotency idempotency = new Idempotency();
 
     /**
+     * 重试配置
+     */
+    private Retry retry = new Retry();
+
+    /**
      * payload 序列化配置
      */
     private Serializer serializer = new Serializer();
@@ -137,6 +149,11 @@ public class ReliableTaskProperties {
          * 单次拉取任务数量，默认 10
          */
         private int batchSize = 10;
+
+        /**
+         * 单次拉取任务数量上限，默认 1000
+         */
+        private int maxBatchSize = 1000;
 
         /**
          * Worker 抢占任务后的初始锁 TTL，单位秒，默认 300
@@ -211,7 +228,9 @@ public class ReliableTaskProperties {
         private long intervalMs = 30000L;
 
         /**
-         * 任务超时阈值，单位秒，默认 300（5 分钟）
+         * 兼容保留的任务超时阈值，单位秒，默认 300（5 分钟）。
+         *
+         * <p>当前 Recovery 以 lockExpireAt <= now 为准，不再在锁过期后额外等待本字段。
          */
         private long timeoutSeconds = 300L;
 
@@ -268,6 +287,16 @@ public class ReliableTaskProperties {
          * 是否启用 Micrometer 指标，默认 false
          */
         private boolean enabled = false;
+
+        /**
+         * 是否在执行类指标中包含 workerId tag，默认关闭以避免高基数。
+         */
+        private boolean includeWorkerIdTag = false;
+
+        /**
+         * 任务统计 Gauge 快照缓存时间，单位毫秒，默认 5000。
+         */
+        private long statsCacheTtlMs = 5000L;
     }
 
     /**
@@ -313,12 +342,39 @@ public class ReliableTaskProperties {
     }
 
     /**
+     * 重试策略配置
+     */
+    @Data
+    public static class Retry {
+        /**
+         * 指数退避增长倍数，默认 2.0
+         */
+        private double exponentialMultiplier = 2.0D;
+
+        /**
+         * 指数退避抖动比例，0 表示关闭抖动
+         */
+        private double jitterRatio = 0.0D;
+
+        /**
+         * 最小重试延迟，单位毫秒，默认 0
+         */
+        private long minDelayMs = 0L;
+
+        /**
+         * 最大重试延迟，单位毫秒，默认 300000
+         */
+        private long maxDelayMs = 300_000L;
+    }
+
+    /**
      * payload 序列化配置
      */
     @Data
     public static class Serializer {
         /**
-         * 默认序列化类型
+         * 保留配置。当前默认注册 JacksonTaskPayloadSerializer；
+         * 如需自定义序列化，请覆盖 TaskPayloadSerializer Bean。
          */
         private String type = "JACKSON";
     }
@@ -329,7 +385,8 @@ public class ReliableTaskProperties {
     @Data
     public static class Store {
         /**
-         * 表前缀，默认可靠
+         * 保留配置。当前 MyBatis Mapper 和 schema 使用固定表名，
+         * 本字段暂不参与表名解析。
          */
         private String tablePrefix = "";
     }
@@ -345,14 +402,29 @@ public class ReliableTaskProperties {
         private boolean enabled = true;
 
         /**
-         * 管理后台端口，默认 9090
+         * 是否启用 Admin 写操作，默认 false
+         */
+        private boolean writeEnabled = false;
+
+        /**
+         * 保留配置。当前不创建独立管理端口，Admin API 使用业务应用 server.port。
          */
         private int port = 9090;
 
         /**
-         * 管理后台上下文路径，默认 /reliable-task
+         * 保留配置。当前 Admin Controller 固定映射在 /api/reliable-task。
          */
         private String contextPath = "/reliable-task";
+
+        /**
+         * Admin 分页大小上限，默认 200
+         */
+        private int maxPageSize = 200;
+
+        /**
+         * Admin 批量操作 limit 上限，默认 1000
+         */
+        private int maxBatchLimit = 1000;
 
         /**
          * 操作审计配置

@@ -10,6 +10,8 @@ Demo 覆盖：
 - Admin API 查询任务、统计、Worker 状态。
 - Micrometer 指标查询。
 
+Demo 只演示 ReliableTask 的投递、执行、重试和管理 API。生产环境仍必须按 at-least-once 语义设计 Handler：同一个业务动作可能因为重试、超时恢复或人工重新入队被执行多次，外部系统调用需要业务方自行保证幂等。
+
 ## 前置条件
 
 | 工具 | 版本 |
@@ -90,9 +92,18 @@ curl "http://localhost:8080/actuator/metrics/reliable_task_pending_total"
 reliable-task-demo/scripts/v2-demo-curl.ps1 -BaseUrl http://localhost:8080
 ```
 
+## 幂等边界
+
+- `/demo/order/duplicate` 演示的是投递幂等：示例代码使用 `TaskSubmitRequest.idempotencyKey("shipment:order:" + orderNo)`，相同 key 会命中同一个任务记录。
+- 投递幂等不等于执行端 exactly-once。`TaskHandler` 仍可能在失败重试、超时恢复或人工重新入队后再次执行。
+- 生产 Handler 应使用稳定业务键保护外部副作用，例如把 `orderNo` 作为发货、发券、发邮件或第三方请求的幂等键。
+- `idempotencyKey` 会作为 `bizUniqueKey` 入库，不能为空白且不能超过 256 字符；不要放入手机号、身份证、Token 或凭证原文。
+- 对不支持幂等键的外部系统，建议先写本地操作流水或副作用表，并用唯一约束避免重复调用。
+
 ## 安全提醒
 
 - `X-Operator: admin` 只用于本地 Demo。
-- 生产环境不要直接暴露 Admin 写接口。
+- Demo 配置中显式开启了 `reliable-task.admin.write-enabled=true`，只用于本地体验。
+- 生产环境不要直接暴露 Admin 写接口，默认应保持 `reliable-task.admin.write-enabled=false`。
 - 生产环境必须接入认证、授权、审计、网络访问控制和监控告警。
 - 不要把真实账号、密码、Token 或内部地址写入 `application-example.yml`。

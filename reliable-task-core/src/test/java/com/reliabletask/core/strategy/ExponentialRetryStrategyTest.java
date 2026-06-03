@@ -64,6 +64,28 @@ class ExponentialRetryStrategyTest {
     }
 
     @Test
+    @DisplayName("nextDelayMs - jitterRatio 使用可控随机源计算抖动")
+    void nextDelayMs_jitterRatio_usesDeterministicRandomSource() {
+        ExponentialRetryStrategy lowJitter = new ExponentialRetryStrategy(2.0, 0.2, () -> 0.0D);
+        ExponentialRetryStrategy midJitter = new ExponentialRetryStrategy(2.0, 0.2, () -> 0.5D);
+        ExponentialRetryStrategy highJitter = new ExponentialRetryStrategy(2.0, 0.2, () -> 1.0D);
+
+        assertEquals(800L, lowJitter.nextDelayMs(0, 1000L, 5000L));
+        assertEquals(1000L, midJitter.nextDelayMs(0, 1000L, 5000L));
+        assertEquals(1200L, highJitter.nextDelayMs(0, 1000L, 5000L));
+    }
+
+    @Test
+    @DisplayName("nextDelayMs - jitter 后仍不超过 maxDelayMs 且不为负数")
+    void nextDelayMs_jitteredDelayStaysWithinBounds() {
+        ExponentialRetryStrategy highJitter = new ExponentialRetryStrategy(2.0, 0.5, () -> 1.0D);
+        ExponentialRetryStrategy lowJitter = new ExponentialRetryStrategy(2.0, 1.0, () -> 0.0D);
+
+        assertEquals(1000L, highJitter.nextDelayMs(0, 1000L, 1000L));
+        assertEquals(0L, lowJitter.nextDelayMs(0, 1000L, 5000L));
+    }
+
+    @Test
     @DisplayName("nextDelayMs - retryCount=0 返回 intervalMs")
     void nextDelayMs_retryCountZero_returnsBaseInterval() {
         ExponentialRetryStrategy strategy = new ExponentialRetryStrategy(3.0);
@@ -79,6 +101,15 @@ class ExponentialRetryStrategyTest {
                 () -> new ExponentialRetryStrategy(0.5));
         assertThrows(IllegalArgumentException.class,
                 () -> new ExponentialRetryStrategy(-1.0));
+    }
+
+    @Test
+    @DisplayName("nextDelayMs - jitterRatio 不在 0 到 1 之间抛异常")
+    void nextDelayMs_invalidJitterRatio_throwsException() {
+        assertThrows(IllegalArgumentException.class,
+                () -> new ExponentialRetryStrategy(2.0, -0.1));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ExponentialRetryStrategy(2.0, 1.1));
     }
 
     @Test

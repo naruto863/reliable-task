@@ -22,6 +22,8 @@ public class IdempotencyContext {
 
     private String bizUniqueKey;
 
+    private String idempotencyKey;
+
     private String payload;
 
     private String strategyName;

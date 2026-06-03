@@ -1,7 +1,11 @@
 package com.reliabletask.executor.handler;
 
+import com.reliabletask.core.enums.TaskEventType;
 import com.reliabletask.core.enums.TaskStatus;
+import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.model.AuditLog;
+import com.reliabletask.core.model.TaskEvent;
+import com.reliabletask.core.model.TaskExecutionLease;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.TaskExecutionMetricsEvent;
 import com.reliabletask.core.spi.TaskAuditRecorder;
@@ -56,6 +60,7 @@ public class TaskExecutor {
     private final TaskMetricsRecorder metricsRecorder;
     private final TaskAuditRecorder auditRecorder;
     private final TaskAlertService alertService;
+    private final TaskEventPublisher eventPublisher;
     private final ScheduledExecutorService leaseRenewalExecutor;
     private final ConcurrentMap<String, Semaphore> concurrencyLimiters = new ConcurrentHashMap<>();
 
@@ -103,6 +108,20 @@ public class TaskExecutor {
                         TaskMetricsRecorder metricsRecorder,
                         TaskAuditRecorder auditRecorder,
                         TaskAlertService alertService) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, interceptor,
+                payloadSerializer, workerProperties, metricsRecorder, auditRecorder,
+                alertService, new TaskEventPublisher());
+    }
+
+    public TaskExecutor(TaskStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskExecutionInterceptor interceptor,
+                        TaskPayloadSerializer payloadSerializer,
+                        WorkerProperties workerProperties,
+                        TaskMetricsRecorder metricsRecorder,
+                        TaskAuditRecorder auditRecorder,
+                        TaskAlertService alertService,
+                        TaskEventPublisher eventPublisher) {
         this.taskStore = taskStore;
         this.handlerRegistry = handlerRegistry;
         this.executorFactory = executorFactory;
@@ -113,6 +132,7 @@ public class TaskExecutor {
         this.metricsRecorder = metricsRecorder != null ? metricsRecorder : new NoopTaskMetricsRecorder();
         this.auditRecorder = auditRecorder != null ? auditRecorder : new NoopTaskAuditRecorder();
         this.alertService = alertService != null ? alertService : new NoopTaskAlertService();
+        this.eventPublisher = eventPublisher != null ? eventPublisher : new TaskEventPublisher();
         this.leaseRenewalExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread thread = new Thread(r, "reliable-task-lease-renewal");
             thread.setDaemon(true);
@@ -137,13 +157,18 @@ public class TaskExecutor {
                 handler = handlerRegistry.getHandler(task.getTaskType());
             } catch (IllegalArgumentException e) {
                 log.error("No handler found for task: id={}, type={}", task.getId(), task.getTaskType());
-                taskStore.markDead(task.getId(), "NO_HANDLER", e.getMessage());
+                if (!markDead(task, "NO_HANDLER", e.getMessage())) {
+                    log.warn("Skip no-handler DEAD log because lease CAS failed: id={}, workerId={}, version={}",
+                            task.getId(), task.getWorkerId(), task.getVersion());
+                    return;
+                }
                 taskStore.saveLog(task.getId(), task.getExecuteCount(),
                         "RUNNING", "DEAD", false, 0, "NO_HANDLER", e.getMessage(),
                         task.getWorkerId(), task.getTraceId());
                 recordMetrics(task, TaskStatus.DEAD, 0, false, "NO_HANDLER");
                 recordAudit(task, "SYSTEM_NO_HANDLER_DEAD", "SUCCESS", e.getMessage());
                 notifyDead(task, "no handler found: " + e.getMessage());
+                publishEvent(TaskEventType.DEAD, task, TaskStatus.RUNNING, TaskStatus.DEAD, "NO_HANDLER");
                 return;
             }
 
@@ -152,32 +177,38 @@ public class TaskExecutor {
             TaskStatus statusBefore = TaskStatus.RUNNING;
 
             try {
-                ExecutorService executor = executorFactory.getExecutor(task.getTaskType());
                 TaskHandler taskHandler = handler;
-
-                Future<?> future = executor.submit(() -> {
-                    interceptor.beforeExecute(task);
-                    Semaphore limiter = resolveConcurrencyLimiter(taskHandler);
-                    boolean acquired = false;
-                    try {
-                        if (limiter != null) {
-                            limiter.acquire();
-                            acquired = true;
+                Future<?> future;
+                try {
+                    ExecutorService executor = executorFactory.getExecutor(task.getTaskType());
+                    future = executor.submit(() -> {
+                        interceptor.beforeExecute(task);
+                        Semaphore limiter = resolveConcurrencyLimiter(taskHandler);
+                        boolean acquired = false;
+                        try {
+                            if (limiter != null) {
+                                limiter.acquire();
+                                acquired = true;
+                            }
+                            Object typedPayload = deserializePayload(taskHandler, task);
+                            taskHandler.execute(task, typedPayload);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new CompletionException(e);
+                        } catch (Exception e) {
+                            throw new CompletionException(e);
+                        } finally {
+                            if (acquired) {
+                                limiter.release();
+                            }
+                            interceptor.afterExecute();
                         }
-                        Object typedPayload = deserializePayload(taskHandler, task);
-                        taskHandler.execute(task, typedPayload);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        throw new CompletionException(e);
-                    } catch (Exception e) {
-                        throw new CompletionException(e);
-                    } finally {
-                        if (acquired) {
-                            limiter.release();
-                        }
-                        interceptor.afterExecute();
-                    }
-                });
+                    });
+                } catch (RuntimeException e) {
+                    long durationMs = System.currentTimeMillis() - startTime;
+                    retryEngine.handleFailure(handler, task, e, durationMs, statusBefore.name());
+                    return;
+                }
 
                 ScheduledFuture<?> leaseRenewal = startLeaseRenewal(task);
                 try {
@@ -192,13 +223,18 @@ public class TaskExecutor {
                 }
 
                 long durationMs = System.currentTimeMillis() - startTime;
-                taskStore.markSuccess(task.getId());
+                if (!markSuccess(task)) {
+                    log.warn("Skip success log because lease CAS failed: id={}, workerId={}, version={}",
+                            task.getId(), task.getWorkerId(), task.getVersion());
+                    return;
+                }
                 taskStore.saveLog(task.getId(), task.getExecuteCount(),
                         statusBefore.name(), "SUCCESS", true, durationMs, null, null,
                         task.getWorkerId(), task.getTraceId());
                 recordMetrics(task, TaskStatus.SUCCESS, durationMs, true, null);
                 log.info("Task executed successfully: id={}, type={}, bizId={}, duration={}ms",
                         task.getId(), task.getTaskType(), task.getBizId(), durationMs);
+                publishEvent(TaskEventType.SUCCEEDED, task, statusBefore, TaskStatus.SUCCESS, "task succeeded");
 
             } catch (TimeoutException e) {
                 long durationMs = System.currentTimeMillis() - startTime;
@@ -262,6 +298,32 @@ public class TaskExecutor {
                 () -> renewLease(task), intervalMs, intervalMs, TimeUnit.MILLISECONDS);
     }
 
+    private boolean markSuccess(TaskInstance task) {
+        TaskExecutionLease lease = TaskExecutionLease.from(task);
+        boolean updated = taskStore.markSuccess(lease);
+        if (!updated && !hasExecutionLeaseIdentity(lease)) {
+            return taskStore.markSuccess(task.getId());
+        }
+        return updated;
+    }
+
+    private boolean markDead(TaskInstance task, String errorCode, String errorMessage) {
+        TaskExecutionLease lease = TaskExecutionLease.from(task);
+        boolean updated = taskStore.markDead(lease, errorCode, errorMessage);
+        if (!updated && !hasExecutionLeaseIdentity(lease)) {
+            return taskStore.markDead(task.getId(), errorCode, errorMessage);
+        }
+        return updated;
+    }
+
+    private boolean hasExecutionLeaseIdentity(TaskExecutionLease lease) {
+        return lease != null
+                && lease.getTaskId() != null
+                && lease.getWorkerId() != null
+                && !lease.getWorkerId().isBlank()
+                && lease.getVersion() != null;
+    }
+
     private void renewLease(TaskInstance task) {
         try {
             LocalDateTime now = LocalDateTime.now();
@@ -323,5 +385,10 @@ public class TaskExecutor {
             log.warn("Failed to record task audit event: taskId={}, operationType={}, reason={}",
                     task.getId(), operationType, e.getMessage());
         }
+    }
+
+    private void publishEvent(TaskEventType eventType, TaskInstance task,
+                              TaskStatus statusBefore, TaskStatus statusAfter, String reason) {
+        eventPublisher.publish(TaskEvent.of(eventType, task, statusBefore, statusAfter, reason));
     }
 }

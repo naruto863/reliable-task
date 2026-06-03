@@ -1,9 +1,12 @@
 package com.reliabletask.executor.template;
 
 import com.reliabletask.core.context.TraceContext;
+import com.reliabletask.core.enums.TaskEventType;
 import com.reliabletask.core.enums.TaskStatus;
+import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.model.IdempotencyContext;
 import com.reliabletask.core.model.IdempotencyDecision;
+import com.reliabletask.core.model.TaskEvent;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.TaskExecutionMetricsEvent;
 import com.reliabletask.core.model.TaskSubmitRequest;
@@ -41,11 +44,14 @@ import java.util.Map;
 @Slf4j
 public class TransactionAwareTaskTemplate implements TaskTemplate {
 
+    private static final int MAX_BIZ_UNIQUE_KEY_LENGTH = 256;
+
     private final TaskStore taskStore;
     private final Map<String, IdempotencyStrategy> idempotencyStrategies;
     private final String defaultIdempotencyStrategyName;
     private final TaskPayloadSerializer payloadSerializer;
     private final TaskMetricsRecorder metricsRecorder;
+    private final TaskEventPublisher eventPublisher;
 
     public TransactionAwareTaskTemplate(TaskStore taskStore) {
         this(taskStore, List.of(new StrictUniqueIdempotencyStrategy()), StrictUniqueIdempotencyStrategy.NAME,
@@ -71,6 +77,16 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
                                         String defaultIdempotencyStrategyName,
                                         TaskPayloadSerializer payloadSerializer,
                                         TaskMetricsRecorder metricsRecorder) {
+        this(taskStore, idempotencyStrategies, defaultIdempotencyStrategyName,
+                payloadSerializer, metricsRecorder, new TaskEventPublisher());
+    }
+
+    public TransactionAwareTaskTemplate(TaskStore taskStore,
+                                        List<IdempotencyStrategy> idempotencyStrategies,
+                                        String defaultIdempotencyStrategyName,
+                                        TaskPayloadSerializer payloadSerializer,
+                                        TaskMetricsRecorder metricsRecorder,
+                                        TaskEventPublisher eventPublisher) {
         this.taskStore = taskStore;
         this.idempotencyStrategies = new HashMap<>();
         if (idempotencyStrategies != null) {
@@ -81,6 +97,7 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
         this.defaultIdempotencyStrategyName = defaultIdempotencyStrategyName;
         this.payloadSerializer = payloadSerializer != null ? payloadSerializer : new JacksonTaskPayloadSerializer();
         this.metricsRecorder = metricsRecorder != null ? metricsRecorder : new NoopTaskMetricsRecorder();
+        this.eventPublisher = eventPublisher != null ? eventPublisher : new TaskEventPublisher();
     }
 
     @Override
@@ -140,8 +157,8 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
      */
     private TaskSubmitResult doSubmit(TaskSubmitRequest request, LocalDateTime executeTime, Object payloadOverride) {
         String serializedPayload = serializePayload(request, payloadOverride);
-        String baseBizUniqueKey = buildBizUniqueKey(
-                request.getTaskType(), request.getBizType(), request.getBizId());
+        String idempotencyKey = normalizeIdempotencyKey(request.getIdempotencyKey());
+        String baseBizUniqueKey = resolveBizUniqueKey(request, idempotencyKey);
         String strategyName = resolveStrategyName(request);
         IdempotencyStrategy strategy = resolveStrategy(strategyName);
         TaskInstance existing = taskStore.getByBizUniqueKey(baseBizUniqueKey);
@@ -150,6 +167,7 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
                 .bizType(request.getBizType())
                 .bizId(request.getBizId())
                 .bizUniqueKey(baseBizUniqueKey)
+                .idempotencyKey(idempotencyKey)
                 .payload(serializedPayload)
                 .strategyName(strategyName)
                 .existingTask(existing)
@@ -178,9 +196,12 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
         String effectiveBizUniqueKey = decision.getBizUniqueKey() != null
                 ? decision.getBizUniqueKey()
                 : baseBizUniqueKey;
+        validateBizUniqueKeyLength(effectiveBizUniqueKey);
         TaskInstance task = buildTaskInstance(request, executeTime, effectiveBizUniqueKey, serializedPayload);
         TaskInstance saved = taskStore.save(task);
         recordSubmitted(saved);
+        eventPublisher.publish(TaskEvent.of(TaskEventType.SUBMITTED, saved,
+                null, TaskStatus.PENDING, "task submitted"));
         log.info("Task submitted: id={}, type={}, bizId={}, strategy={}, traceId={}, idempotencyHit={}",
                 saved.getId(), saved.getTaskType(), saved.getBizId(), strategyName, saved.getTraceId(), false);
         return TaskSubmitResult.builder()
@@ -241,6 +262,32 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
      */
     private String buildBizUniqueKey(String taskType, String bizType, String bizId) {
         return taskType + ":" + bizType + ":" + bizId;
+    }
+
+    private String resolveBizUniqueKey(TaskSubmitRequest request, String idempotencyKey) {
+        String bizUniqueKey = idempotencyKey != null
+                ? idempotencyKey
+                : buildBizUniqueKey(request.getTaskType(), request.getBizType(), request.getBizId());
+        validateBizUniqueKeyLength(bizUniqueKey);
+        return bizUniqueKey;
+    }
+
+    private String normalizeIdempotencyKey(String idempotencyKey) {
+        if (idempotencyKey == null) {
+            return null;
+        }
+        String normalized = idempotencyKey.trim();
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException("idempotencyKey must not be blank when provided");
+        }
+        return normalized;
+    }
+
+    private void validateBizUniqueKeyLength(String bizUniqueKey) {
+        if (bizUniqueKey != null && bizUniqueKey.length() > MAX_BIZ_UNIQUE_KEY_LENGTH) {
+            throw new IllegalArgumentException("bizUniqueKey/idempotencyKey length must not exceed "
+                    + MAX_BIZ_UNIQUE_KEY_LENGTH);
+        }
     }
 
     private String serializePayload(TaskSubmitRequest request, Object payloadOverride) {

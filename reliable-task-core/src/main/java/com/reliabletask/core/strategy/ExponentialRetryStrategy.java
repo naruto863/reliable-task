@@ -3,6 +3,9 @@ package com.reliabletask.core.strategy;
 import com.reliabletask.core.enums.RetryStrategyType;
 import com.reliabletask.core.spi.RetryStrategy;
 
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.DoubleSupplier;
+
 /**
  * 指数退避重试策略
  *
@@ -25,15 +28,37 @@ public class ExponentialRetryStrategy implements RetryStrategy {
      */
     private final double multiplier;
 
+    /**
+     * 抖动比例，0 表示关闭抖动。
+     */
+    private final double jitterRatio;
+
+    private final DoubleSupplier randomSupplier;
+
     public ExponentialRetryStrategy() {
-        this(DEFAULT_MULTIPLIER);
+        this(DEFAULT_MULTIPLIER, 0.0D);
     }
 
     public ExponentialRetryStrategy(double multiplier) {
+        this(multiplier, 0.0D);
+    }
+
+    public ExponentialRetryStrategy(double multiplier, double jitterRatio) {
+        this(multiplier, jitterRatio, () -> ThreadLocalRandom.current().nextDouble());
+    }
+
+    public ExponentialRetryStrategy(double multiplier, double jitterRatio, DoubleSupplier randomSupplier) {
         if (multiplier <= 1.0) {
             throw new IllegalArgumentException("multiplier must be greater than 1.0");
         }
+        if (jitterRatio < 0.0D || jitterRatio > 1.0D) {
+            throw new IllegalArgumentException("jitterRatio must be between 0.0 and 1.0");
+        }
         this.multiplier = multiplier;
+        this.jitterRatio = jitterRatio;
+        this.randomSupplier = randomSupplier != null
+                ? randomSupplier
+                : () -> ThreadLocalRandom.current().nextDouble();
     }
 
     @Override
@@ -44,6 +69,22 @@ public class ExponentialRetryStrategy implements RetryStrategy {
     @Override
     public long nextDelayMs(int retryCount, long intervalMs, long maxDelayMs) {
         double delay = intervalMs * Math.pow(multiplier, retryCount);
-        return (long) Math.min(delay, maxDelayMs);
+        long cappedDelay = (long) Math.min(delay, maxDelayMs);
+        if (jitterRatio == 0.0D || cappedDelay <= 0L) {
+            return Math.max(cappedDelay, 0L);
+        }
+
+        double random = normalizeRandom(randomSupplier.getAsDouble());
+        double min = cappedDelay * (1.0D - jitterRatio);
+        double max = cappedDelay * (1.0D + jitterRatio);
+        long jitteredDelay = (long) (min + (max - min) * random);
+        return Math.max(0L, Math.min(jitteredDelay, maxDelayMs));
+    }
+
+    private double normalizeRandom(double random) {
+        if (Double.isNaN(random)) {
+            return 0.5D;
+        }
+        return Math.max(0.0D, Math.min(1.0D, random));
     }
 }

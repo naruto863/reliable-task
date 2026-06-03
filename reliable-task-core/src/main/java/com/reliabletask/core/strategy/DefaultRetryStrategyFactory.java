@@ -19,6 +19,8 @@ public class DefaultRetryStrategyFactory {
 
     private static final FixedRetryStrategy FIXED_STRATEGY = new FixedRetryStrategy();
     private static final ExponentialRetryStrategy EXPONENTIAL_STRATEGY = new ExponentialRetryStrategy();
+    private static final RetryStrategyRegistry DEFAULT_REGISTRY =
+            new RetryStrategyRegistry(FIXED_STRATEGY, EXPONENTIAL_STRATEGY, java.util.List.of());
 
     private DefaultRetryStrategyFactory() {
     }
@@ -28,19 +30,10 @@ public class DefaultRetryStrategyFactory {
      *
      * @param type 重试策略类型
      * @return 对应的 RetryStrategy 实现
-     * @throws IllegalArgumentException 当 type 为 CUSTOM 或 null 时
+     * @throws IllegalArgumentException 当 type 为 CUSTOM 且未注册自定义策略时
      */
     public static RetryStrategy getStrategy(RetryStrategyType type) {
-        if (type == null) {
-            return EXPONENTIAL_STRATEGY;
-        }
-
-        return switch (type) {
-            case FIXED -> FIXED_STRATEGY;
-            case EXPONENTIAL -> EXPONENTIAL_STRATEGY;
-            case CUSTOM -> throw new IllegalArgumentException(
-                    "CUSTOM strategy requires business to implement RetryStrategy interface");
-        };
+        return DEFAULT_REGISTRY.getStrategy(type);
     }
 
     /**

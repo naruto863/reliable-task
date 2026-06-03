@@ -5,6 +5,8 @@ import com.reliabletask.core.spi.RetryStrategy;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("DefaultRetryStrategyFactory 测试")
@@ -34,10 +36,29 @@ class DefaultRetryStrategyFactoryTest {
     }
 
     @Test
-    @DisplayName("getStrategy(CUSTOM) 抛异常")
-    void getStrategy_custom_throwsException() {
+    @DisplayName("getStrategy(CUSTOM) 未注册自定义策略时抛异常")
+    void getStrategy_customWithoutRegistry_throwsException() {
         assertThrows(IllegalArgumentException.class,
                 () -> DefaultRetryStrategyFactory.getStrategy(RetryStrategyType.CUSTOM));
+    }
+
+    @Test
+    @DisplayName("RetryStrategyRegistry - CUSTOM 返回注册的自定义策略")
+    void retryStrategyRegistry_custom_returnsRegisteredStrategy() {
+        RetryStrategy customStrategy = new CustomRetryStrategy();
+        RetryStrategyRegistry registry = new RetryStrategyRegistry(List.of(customStrategy));
+
+        assertSame(customStrategy, registry.getStrategy(RetryStrategyType.CUSTOM));
+        assertSame(customStrategy, registry.getStrategy("custom-fast"));
+    }
+
+    @Test
+    @DisplayName("RetryStrategyRegistry - 用户策略可覆盖内置类型")
+    void retryStrategyRegistry_userStrategyOverridesBuiltinType() {
+        RetryStrategy customFixedStrategy = new CustomFixedRetryStrategy();
+        RetryStrategyRegistry registry = new RetryStrategyRegistry(List.of(customFixedStrategy));
+
+        assertSame(customFixedStrategy, registry.getStrategy(RetryStrategyType.FIXED));
     }
 
     @Test
@@ -64,5 +85,34 @@ class DefaultRetryStrategyFactoryTest {
         RetryStrategy exp1 = DefaultRetryStrategyFactory.getStrategy(RetryStrategyType.EXPONENTIAL);
         RetryStrategy exp2 = DefaultRetryStrategyFactory.getStrategy(RetryStrategyType.EXPONENTIAL);
         assertSame(exp1, exp2);
+    }
+
+    static class CustomRetryStrategy implements RetryStrategy {
+        @Override
+        public RetryStrategyType getType() {
+            return RetryStrategyType.CUSTOM;
+        }
+
+        @Override
+        public String getName() {
+            return "custom-fast";
+        }
+
+        @Override
+        public long nextDelayMs(int retryCount, long intervalMs, long maxDelayMs) {
+            return 123L;
+        }
+    }
+
+    static class CustomFixedRetryStrategy implements RetryStrategy {
+        @Override
+        public RetryStrategyType getType() {
+            return RetryStrategyType.FIXED;
+        }
+
+        @Override
+        public long nextDelayMs(int retryCount, long intervalMs, long maxDelayMs) {
+            return 42L;
+        }
     }
 }

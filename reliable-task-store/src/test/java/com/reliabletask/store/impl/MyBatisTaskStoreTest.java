@@ -10,6 +10,7 @@ import com.reliabletask.core.enums.RetryStrategyType;
 import com.reliabletask.core.enums.TaskStatus;
 import com.reliabletask.core.model.AuditLog;
 import com.reliabletask.core.model.BatchOperationResult;
+import com.reliabletask.core.model.TaskExecutionLease;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.WorkerHeartbeat;
 import com.reliabletask.core.vo.TaskDetailVO;
@@ -272,6 +273,18 @@ class MyBatisTaskStoreTest {
         assertEquals(TaskStatus.RETRYING, result.get(1).getStatus());
     }
 
+    @Test
+    @DisplayName("fetchPendingTasks - batchSize 超限时裁剪到安全上限")
+    void fetchPendingTasks_clampsLargeBatchSize() {
+        when(taskMapper.selectList(any())).thenReturn(List.of());
+
+        List<TaskInstance> result = taskStore.fetchPendingTasks(5000);
+
+        assertTrue(result.isEmpty());
+        LambdaQueryWrapper<ReliableTaskEntity> wrapper = captureTaskQueryWrapper();
+        assertTrue(wrapper.getSqlSegment().contains("LIMIT 1000"));
+    }
+
     // ==================== claimTask ====================
 
     @Test
@@ -329,6 +342,40 @@ class MyBatisTaskStoreTest {
         assertTrue(taskStore.markSuccess(1L));
     }
 
+    @Test
+    @DisplayName("markSuccess - 租约回写使用 Worker 和版本 CAS")
+    void markSuccess_withLeaseUsesWorkerAndVersionCas() {
+        TaskExecutionLease lease = runningLease();
+        when(taskMapper.update(isNull(), any())).thenReturn(1);
+
+        assertTrue(taskStore.markSuccess(lease));
+
+        LambdaUpdateWrapper<ReliableTaskEntity> wrapper = captureTaskUpdateWrapper();
+        assertExecutionLeaseConditions(wrapper, lease);
+        assertTrue(wrapper.getParamNameValuePairs().containsValue(TaskStatus.SUCCESS.getCode()));
+        assertTrue(wrapper.getSqlSet().contains("version = version + 1"));
+    }
+
+    @Test
+    @DisplayName("markSuccess - 旧租约 CAS 失败返回 false")
+    void markSuccess_withStaleLeaseReturnsFalse() {
+        when(taskMapper.update(isNull(), any())).thenReturn(0);
+
+        assertFalse(taskStore.markSuccess(runningLease()));
+    }
+
+    @Test
+    @DisplayName("markSuccess - 缺少租约身份不更新")
+    void markSuccess_withoutLeaseIdentityDoesNotUpdate() {
+        TaskExecutionLease missingVersion = TaskExecutionLease.builder()
+                .taskId(1L)
+                .workerId("worker-1")
+                .build();
+
+        assertFalse(taskStore.markSuccess(missingVersion));
+        verify(taskMapper, never()).update(any(), any());
+    }
+
     // ==================== markWaitRetry ====================
 
     @Test
@@ -339,6 +386,24 @@ class MyBatisTaskStoreTest {
         assertTrue(taskStore.markWaitRetry(1L, "timeout", LocalDateTime.now().plusSeconds(10)));
     }
 
+    @Test
+    @DisplayName("markWaitRetry - 租约回写使用 Worker 和版本 CAS")
+    void markWaitRetry_withLeaseUsesWorkerAndVersionCas() {
+        TaskExecutionLease lease = runningLease();
+        LocalDateTime nextExecuteTime = LocalDateTime.now().plusSeconds(10);
+        when(taskMapper.update(isNull(), any())).thenReturn(1);
+
+        assertTrue(taskStore.markWaitRetry(lease, "TimeoutException", "timeout", nextExecuteTime));
+
+        LambdaUpdateWrapper<ReliableTaskEntity> wrapper = captureTaskUpdateWrapper();
+        assertExecutionLeaseConditions(wrapper, lease);
+        assertTrue(wrapper.getParamNameValuePairs().containsValue(TaskStatus.RETRYING.getCode()));
+        assertTrue(wrapper.getParamNameValuePairs().containsValue("TimeoutException"));
+        assertTrue(wrapper.getParamNameValuePairs().containsValue("timeout"));
+        assertTrue(wrapper.getParamNameValuePairs().containsValue(nextExecuteTime));
+        assertTrue(wrapper.getSqlSet().contains("version = version + 1"));
+    }
+
     // ==================== markDead ====================
 
     @Test
@@ -347,6 +412,22 @@ class MyBatisTaskStoreTest {
         when(taskMapper.update(isNull(), any())).thenReturn(1);
 
         assertTrue(taskStore.markDead(1L, "max retries"));
+    }
+
+    @Test
+    @DisplayName("markDead - 租约回写使用 Worker 和版本 CAS")
+    void markDead_withLeaseUsesWorkerAndVersionCas() {
+        TaskExecutionLease lease = runningLease();
+        when(taskMapper.update(isNull(), any())).thenReturn(1);
+
+        assertTrue(taskStore.markDead(lease, "NonRetryableException", "fatal"));
+
+        LambdaUpdateWrapper<ReliableTaskEntity> wrapper = captureTaskUpdateWrapper();
+        assertExecutionLeaseConditions(wrapper, lease);
+        assertTrue(wrapper.getParamNameValuePairs().containsValue(TaskStatus.DEAD.getCode()));
+        assertTrue(wrapper.getParamNameValuePairs().containsValue("NonRetryableException"));
+        assertTrue(wrapper.getParamNameValuePairs().containsValue("fatal"));
+        assertTrue(wrapper.getSqlSet().contains("version = version + 1"));
     }
 
     // ==================== cancelTask ====================
@@ -395,6 +476,26 @@ class MyBatisTaskStoreTest {
         assertEquals(TaskStatus.RUNNING, result.get(0).getStatus());
     }
 
+    @Test
+    @DisplayName("findTimeoutTasks - 使用锁过期时间和 limit 稳定扫描")
+    void findTimeoutTasks_withLimitUsesExpiredLockAndStableLimit() {
+        LocalDateTime threshold = LocalDateTime.now();
+        ReliableTaskEntity entity = new ReliableTaskEntity();
+        entity.setId(1L);
+        entity.setStatus(TaskStatus.RUNNING.getCode());
+        when(taskMapper.selectList(any())).thenReturn(List.of(entity));
+
+        List<TaskInstance> result = taskStore.findTimeoutTasks(threshold, 5);
+
+        assertEquals(1, result.size());
+        LambdaQueryWrapper<ReliableTaskEntity> wrapper = captureTaskQueryWrapper();
+        String sqlSegment = wrapper.getSqlSegment();
+        assertSqlContainsColumn(sqlSegment, "lock_expire_at", "lockExpireAt");
+        assertTrue(sqlSegment.contains("LIMIT 5"));
+        assertTrue(wrapper.getParamNameValuePairs().containsValue(TaskStatus.RUNNING.getCode()));
+        assertTrue(wrapper.getParamNameValuePairs().containsValue(threshold));
+    }
+
     // ==================== resetTimeoutTask ====================
 
     @Test
@@ -403,6 +504,50 @@ class MyBatisTaskStoreTest {
         when(taskMapper.update(isNull(), any())).thenReturn(1);
 
         assertTrue(taskStore.resetTimeoutTask(1L));
+    }
+
+    @Test
+    @DisplayName("resetTimeoutTask - 旧接口只重置锁已过期的 RUNNING 任务")
+    void resetTimeoutTask_requiresExpiredLock() {
+        when(taskMapper.update(isNull(), any())).thenReturn(1);
+
+        assertTrue(taskStore.resetTimeoutTask(1L));
+
+        LambdaUpdateWrapper<ReliableTaskEntity> wrapper = captureTaskUpdateWrapper();
+        String sqlSegment = wrapper.getSqlSegment();
+        assertSqlContainsColumn(sqlSegment, "lock_expire_at", "lockExpireAt");
+        assertTrue(wrapper.getSqlSet().contains("version = version + 1"));
+    }
+
+    @Test
+    @DisplayName("resetTimeoutTask - 租约恢复校验 Worker、版本和过期锁")
+    void resetTimeoutTask_withLeaseUsesWorkerVersionAndExpiredLockCas() {
+        TaskExecutionLease lease = runningLease();
+        when(taskMapper.update(isNull(), any())).thenReturn(1);
+
+        assertTrue(taskStore.resetTimeoutTask(lease));
+
+        LambdaUpdateWrapper<ReliableTaskEntity> wrapper = captureTaskUpdateWrapper();
+        assertExecutionLeaseConditions(wrapper, lease);
+        String sqlSegment = wrapper.getSqlSegment();
+        assertSqlContainsColumn(sqlSegment, "lock_expire_at", "lockExpireAt");
+        assertTrue(wrapper.getParamNameValuePairs().containsValue(lease.getLockExpireAt()));
+        assertTrue(wrapper.getParamNameValuePairs().containsValue(TaskStatus.PENDING.getCode()));
+        assertTrue(wrapper.getSqlSet().contains("version = version + 1"));
+    }
+
+    @Test
+    @DisplayName("resetTimeoutTask - 缺少锁过期时间不更新")
+    void resetTimeoutTask_withoutLockExpireAtDoesNotUpdate() {
+        TaskExecutionLease missingLockExpireAt = TaskExecutionLease.builder()
+                .taskId(1L)
+                .workerId("worker-1")
+                .lockedAt(LocalDateTime.now().minusSeconds(30))
+                .version(3)
+                .build();
+
+        assertFalse(taskStore.resetTimeoutTask(missingLockExpireAt));
+        verify(taskMapper, never()).update(any(), any());
     }
 
     // ==================== saveLog ====================
@@ -451,6 +596,28 @@ class MyBatisTaskStoreTest {
         assertEquals(1, result.getTotal());
         assertEquals(1, result.getRecords().size());
         assertEquals("TYPE_A", result.getRecords().get(0).getTaskType());
+    }
+
+    @Test
+    @DisplayName("listTasks - pageSize 超限时裁剪到安全上限")
+    void listTasks_clampsPageSize() {
+        Page<ReliableTaskEntity> page = new Page<>(1, 200);
+        page.setRecords(List.of());
+        page.setTotal(0L);
+        when(taskMapper.selectPage(any(), any())).thenReturn(page);
+
+        TaskQueryRequest request = TaskQueryRequest.builder()
+                .pageNum(-1)
+                .pageSize(5000)
+                .build();
+
+        PageResult<TaskVO> result = taskStore.listTasks(request);
+
+        assertEquals(1, result.getPageNum());
+        assertEquals(200, result.getPageSize());
+        Page<ReliableTaskEntity> capturedPage = captureTaskPage();
+        assertEquals(1, capturedPage.getCurrent());
+        assertEquals(200, capturedPage.getSize());
     }
 
     @Test
@@ -537,6 +704,9 @@ class MyBatisTaskStoreTest {
                 Map.of("taskType", "TYPE_B", "count", 2L)
         ));
         when(taskMapper.selectCount(any())).thenReturn(2L, 1L, 1L);
+        ReliableTaskEntity oldest = new ReliableTaskEntity();
+        oldest.setCreateTime(LocalDateTime.now().minusMinutes(3));
+        when(taskMapper.selectOne(any())).thenReturn(oldest);
 
         TaskStatsVO result = taskStore.getStats();
 
@@ -544,6 +714,7 @@ class MyBatisTaskStoreTest {
         assertEquals(5, result.getTotalTasks());
         assertTrue(result.getPendingTasks() > 0);
         assertTrue(result.getDeadTasks() > 0);
+        assertTrue(result.getOldestPendingAgeSeconds() >= 170L);
         assertEquals(3L, result.getTaskTypeStats().get("TYPE_A"));
     }
 
@@ -635,6 +806,23 @@ class MyBatisTaskStoreTest {
     }
 
     @Test
+    @DisplayName("listAuditLogs - pageSize 超限时裁剪到安全上限")
+    void listAuditLogs_clampsPageSize() {
+        Page<ReliableTaskAuditLogEntity> page = new Page<>(1, 200);
+        page.setRecords(List.of());
+        page.setTotal(0L);
+        when(auditLogMapper.selectPage(any(), any())).thenReturn(page);
+
+        PageResult<AuditLog> result = taskStore.listAuditLogs(null, null, null, 0, 5000);
+
+        assertEquals(1, result.getPageNum());
+        assertEquals(200, result.getPageSize());
+        Page<ReliableTaskAuditLogEntity> capturedPage = captureAuditLogPage();
+        assertEquals(1, capturedPage.getCurrent());
+        assertEquals(200, capturedPage.getSize());
+    }
+
+    @Test
     @DisplayName("createBatchOperation - 创建批量操作并限制最大 limit")
     void createBatchOperation_insertsWithSafeLimit() {
         doAnswer(invocation -> {
@@ -680,9 +868,69 @@ class MyBatisTaskStoreTest {
         when(taskMapper.selectList(any())).thenReturn(List.of(entity));
 
         List<Long> ids = taskStore.findOperableTaskIds("TYPE_A", TaskStatus.DEAD,
-                LocalDateTime.now().minusDays(1), LocalDateTime.now(), 10);
+                LocalDateTime.now().minusDays(1), LocalDateTime.now(), 5000);
 
         assertEquals(List.of(1L), ids);
-        verify(taskMapper).selectList(any(LambdaQueryWrapper.class));
+        LambdaQueryWrapper<ReliableTaskEntity> wrapper = captureTaskQueryWrapper();
+        assertTrue(wrapper.getSqlSegment().contains("LIMIT 1000"));
+    }
+
+    private TaskExecutionLease runningLease() {
+        LocalDateTime lockedAt = LocalDateTime.now().minusSeconds(30);
+        LocalDateTime lockExpireAt = LocalDateTime.now().minusSeconds(1);
+        return TaskExecutionLease.builder()
+                .taskId(1L)
+                .workerId("worker-1")
+                .lockedAt(lockedAt)
+                .lockExpireAt(lockExpireAt)
+                .version(3)
+                .build();
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private LambdaUpdateWrapper<ReliableTaskEntity> captureTaskUpdateWrapper() {
+        ArgumentCaptor<LambdaUpdateWrapper> captor = ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(taskMapper).update(isNull(), captor.capture());
+        return (LambdaUpdateWrapper<ReliableTaskEntity>) captor.getValue();
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private LambdaQueryWrapper<ReliableTaskEntity> captureTaskQueryWrapper() {
+        ArgumentCaptor<LambdaQueryWrapper> captor = ArgumentCaptor.forClass(LambdaQueryWrapper.class);
+        verify(taskMapper).selectList(captor.capture());
+        return (LambdaQueryWrapper<ReliableTaskEntity>) captor.getValue();
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private Page<ReliableTaskEntity> captureTaskPage() {
+        ArgumentCaptor<Page> captor = ArgumentCaptor.forClass(Page.class);
+        verify(taskMapper).selectPage(captor.capture(), any());
+        return (Page<ReliableTaskEntity>) captor.getValue();
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private Page<ReliableTaskAuditLogEntity> captureAuditLogPage() {
+        ArgumentCaptor<Page> captor = ArgumentCaptor.forClass(Page.class);
+        verify(auditLogMapper).selectPage(captor.capture(), any());
+        return (Page<ReliableTaskAuditLogEntity>) captor.getValue();
+    }
+
+    private void assertExecutionLeaseConditions(LambdaUpdateWrapper<ReliableTaskEntity> wrapper,
+                                                TaskExecutionLease lease) {
+        String sqlSegment = wrapper.getSqlSegment();
+        assertTrue(sqlSegment.contains("id"));
+        assertTrue(sqlSegment.contains("status"));
+        assertSqlContainsColumn(sqlSegment, "worker_id", "workerId");
+        assertTrue(sqlSegment.contains("version"));
+        assertSqlContainsColumn(sqlSegment, "locked_at", "lockedAt");
+        assertTrue(wrapper.getParamNameValuePairs().containsValue(lease.getTaskId()));
+        assertTrue(wrapper.getParamNameValuePairs().containsValue(TaskStatus.RUNNING.getCode()));
+        assertTrue(wrapper.getParamNameValuePairs().containsValue(lease.getWorkerId()));
+        assertTrue(wrapper.getParamNameValuePairs().containsValue(lease.getVersion()));
+        assertTrue(wrapper.getParamNameValuePairs().containsValue(lease.getLockedAt()));
+    }
+
+    private void assertSqlContainsColumn(String sqlSegment, String columnName, String propertyName) {
+        assertTrue(sqlSegment.contains(columnName) || sqlSegment.contains(propertyName));
     }
 }

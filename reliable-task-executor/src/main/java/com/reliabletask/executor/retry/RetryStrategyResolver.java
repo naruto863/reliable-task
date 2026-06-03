@@ -50,14 +50,24 @@ public class RetryStrategyResolver {
      * @return 合并后的重试参数
      */
     public static ResolvedRetryConfig resolve(TaskHandler handler, TaskInstance task) {
+        return resolve(handler, task, new RetryProperties());
+    }
+
+    /**
+     * 解析 Handler 注解、TaskInstance 配置和全局重试配置。
+     */
+    public static ResolvedRetryConfig resolve(TaskHandler handler, TaskInstance task,
+                                              RetryProperties retryProperties) {
         TaskRetryable annotation = handler.getClass().getAnnotation(TaskRetryable.class);
+        RetryProperties properties = retryProperties != null ? retryProperties : new RetryProperties();
 
         int maxRetryCount = resolveMaxRetryCount(annotation, task);
         RetryStrategyType strategy = resolveStrategy(annotation, task);
         long retryIntervalMs = resolveRetryIntervalMs(annotation, task);
-        long maxDelayMs = resolveMaxDelayMs(annotation);
+        long maxDelayMs = resolveMaxDelayMs(annotation, properties);
+        long minDelayMs = resolveMinDelayMs(properties, maxDelayMs);
 
-        return new ResolvedRetryConfig(maxRetryCount, strategy, retryIntervalMs, maxDelayMs);
+        return new ResolvedRetryConfig(maxRetryCount, strategy, retryIntervalMs, minDelayMs, maxDelayMs);
     }
 
     private static int resolveMaxRetryCount(TaskRetryable annotation, TaskInstance task) {
@@ -90,11 +100,19 @@ public class RetryStrategyResolver {
         return DEFAULT_RETRY_INTERVAL_MS;
     }
 
-    private static long resolveMaxDelayMs(TaskRetryable annotation) {
+    private static long resolveMaxDelayMs(TaskRetryable annotation, RetryProperties retryProperties) {
         if (annotation != null && annotation.maxDelayMs() > 0) {
             return annotation.maxDelayMs();
         }
+        if (retryProperties.getMaxDelayMs() > 0) {
+            return retryProperties.getMaxDelayMs();
+        }
         return DEFAULT_MAX_DELAY_MS;
+    }
+
+    private static long resolveMinDelayMs(RetryProperties retryProperties, long maxDelayMs) {
+        long minDelayMs = Math.max(0L, retryProperties.getMinDelayMs());
+        return Math.min(minDelayMs, maxDelayMs);
     }
 
     /**
@@ -104,13 +122,15 @@ public class RetryStrategyResolver {
         private final int maxRetryCount;
         private final RetryStrategyType strategy;
         private final long retryIntervalMs;
+        private final long minDelayMs;
         private final long maxDelayMs;
 
         public ResolvedRetryConfig(int maxRetryCount, RetryStrategyType strategy,
-                                   long retryIntervalMs, long maxDelayMs) {
+                                   long retryIntervalMs, long minDelayMs, long maxDelayMs) {
             this.maxRetryCount = maxRetryCount;
             this.strategy = strategy;
             this.retryIntervalMs = retryIntervalMs;
+            this.minDelayMs = minDelayMs;
             this.maxDelayMs = maxDelayMs;
         }
 
@@ -124,6 +144,10 @@ public class RetryStrategyResolver {
 
         public long getRetryIntervalMs() {
             return retryIntervalMs;
+        }
+
+        public long getMinDelayMs() {
+            return minDelayMs;
         }
 
         public long getMaxDelayMs() {

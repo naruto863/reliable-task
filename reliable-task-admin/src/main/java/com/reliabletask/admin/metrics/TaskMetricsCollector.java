@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
@@ -75,6 +76,7 @@ public class TaskMetricsCollector {
         stats.setTodayFailedTasks(todayFailed);
 
         // 3. 按 taskType 分组统计
+        stats.setOldestPendingAgeSeconds(resolveOldestPendingAgeSeconds());
         stats.setTaskTypeStats(parseTaskTypeCount(taskMapper.countByTaskType()));
 
         return stats;
@@ -112,5 +114,19 @@ public class TaskMetricsCollector {
             return 0L;
         }
         return ((Number) countObj).longValue();
+    }
+
+    private long resolveOldestPendingAgeSeconds() {
+        ReliableTaskEntity oldest = taskMapper.selectOne(
+                new LambdaQueryWrapper<ReliableTaskEntity>()
+                        .in(ReliableTaskEntity::getStatus,
+                                TaskStatus.PENDING.getCode(), TaskStatus.RETRYING.getCode())
+                        .orderByAsc(ReliableTaskEntity::getCreateTime)
+                        .last("LIMIT 1")
+        );
+        if (oldest == null || oldest.getCreateTime() == null) {
+            return 0L;
+        }
+        return Math.max(Duration.between(oldest.getCreateTime(), LocalDateTime.now()).getSeconds(), 0L);
     }
 }

@@ -9,6 +9,7 @@ import com.reliabletask.core.enums.TaskStatus;
 import com.reliabletask.core.lifecycle.TaskStateMachine;
 import com.reliabletask.core.model.AuditLog;
 import com.reliabletask.core.model.BatchOperationResult;
+import com.reliabletask.core.model.TaskExecutionLease;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.WorkerHeartbeat;
 import com.reliabletask.core.spi.TaskStore;
@@ -32,6 +33,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
@@ -57,6 +59,7 @@ public class MyBatisTaskStore implements TaskStore {
 
     private static final long DEFAULT_LOCK_TTL_MINUTES = 5;
     private static final int MAX_BATCH_QUERY_LIMIT = 1000;
+    private static final int MAX_PAGE_SIZE = TaskQueryRequest.DEFAULT_MAX_PAGE_SIZE;
 
     private final ReliableTaskMapper taskMapper;
     private final ReliableTaskLogMapper taskLogMapper;
@@ -156,7 +159,7 @@ public class MyBatisTaskStore implements TaskStore {
                         .le(ReliableTaskEntity::getNextExecuteTime, LocalDateTime.now())
                         .orderByAsc(ReliableTaskEntity::getPriority)
                         .orderByAsc(ReliableTaskEntity::getNextExecuteTime)
-                        .last("LIMIT " + batchSize)
+                        .last("LIMIT " + normalizeBatchLimit(batchSize))
         );
         return entities.stream()
                 .map(ReliableTaskConverter::toDomain)
@@ -235,6 +238,27 @@ public class MyBatisTaskStore implements TaskStore {
     }
 
     @Override
+    public boolean markSuccess(TaskExecutionLease lease) {
+        if (!hasExecutionLeaseIdentity(lease)) {
+            return false;
+        }
+        TaskStateMachine.requireTransit(TaskStatus.RUNNING, TaskStatus.SUCCESS);
+        LocalDateTime now = LocalDateTime.now();
+        int rows = taskMapper.update(null,
+                executionLeaseWrapper(lease)
+                        .set(ReliableTaskEntity::getStatus, TaskStatus.SUCCESS.getCode())
+                        .set(ReliableTaskEntity::getFinishTime, now)
+                        .set(ReliableTaskEntity::getWorkerId, null)
+                        .set(ReliableTaskEntity::getLockedAt, null)
+                        .set(ReliableTaskEntity::getLockExpireAt, null)
+                        .set(ReliableTaskEntity::getHeartbeatTime, null)
+                        .setSql("version = version + 1")
+                        .set(ReliableTaskEntity::getUpdateTime, now)
+        );
+        return rows > 0;
+    }
+
+    @Override
     public boolean markWaitRetry(Long id, String errorMsg, LocalDateTime nextExecuteTime) {
         return markWaitRetry(id, null, errorMsg, nextExecuteTime);
     }
@@ -255,6 +279,35 @@ public class MyBatisTaskStore implements TaskStore {
                         .set(ReliableTaskEntity::getLockExpireAt, null)
                         .set(ReliableTaskEntity::getHeartbeatTime, null)
                         .set(ReliableTaskEntity::getUpdateTime, LocalDateTime.now())
+        );
+        return rows > 0;
+    }
+
+    @Override
+    public boolean markWaitRetry(TaskExecutionLease lease, String errorMsg, LocalDateTime nextExecuteTime) {
+        return markWaitRetry(lease, null, errorMsg, nextExecuteTime);
+    }
+
+    @Override
+    public boolean markWaitRetry(TaskExecutionLease lease, String errorCode, String errorMsg,
+                                 LocalDateTime nextExecuteTime) {
+        if (!hasExecutionLeaseIdentity(lease)) {
+            return false;
+        }
+        TaskStateMachine.requireTransit(TaskStatus.RUNNING, TaskStatus.RETRYING);
+        LocalDateTime now = LocalDateTime.now();
+        int rows = taskMapper.update(null,
+                executionLeaseWrapper(lease)
+                        .set(ReliableTaskEntity::getStatus, TaskStatus.RETRYING.getCode())
+                        .set(ReliableTaskEntity::getErrorMsg, truncate(errorMsg, 2000))
+                        .set(ReliableTaskEntity::getLastErrorCode, truncate(errorCode, 128))
+                        .set(ReliableTaskEntity::getNextExecuteTime, nextExecuteTime)
+                        .set(ReliableTaskEntity::getWorkerId, null)
+                        .set(ReliableTaskEntity::getLockedAt, null)
+                        .set(ReliableTaskEntity::getLockExpireAt, null)
+                        .set(ReliableTaskEntity::getHeartbeatTime, null)
+                        .setSql("version = version + 1")
+                        .set(ReliableTaskEntity::getUpdateTime, now)
         );
         return rows > 0;
     }
@@ -283,6 +336,34 @@ public class MyBatisTaskStore implements TaskStore {
                         .set(ReliableTaskEntity::getLockExpireAt, null)
                         .set(ReliableTaskEntity::getHeartbeatTime, null)
                         .set(ReliableTaskEntity::getUpdateTime, LocalDateTime.now())
+        );
+        return rows > 0;
+    }
+
+    @Override
+    public boolean markDead(TaskExecutionLease lease, String errorMsg) {
+        return markDead(lease, null, errorMsg);
+    }
+
+    @Override
+    public boolean markDead(TaskExecutionLease lease, String errorCode, String errorMsg) {
+        if (!hasExecutionLeaseIdentity(lease)) {
+            return false;
+        }
+        TaskStateMachine.requireTransit(TaskStatus.RUNNING, TaskStatus.DEAD);
+        LocalDateTime now = LocalDateTime.now();
+        int rows = taskMapper.update(null,
+                executionLeaseWrapper(lease)
+                        .set(ReliableTaskEntity::getStatus, TaskStatus.DEAD.getCode())
+                        .set(ReliableTaskEntity::getErrorMsg, truncate(errorMsg, 2000))
+                        .set(ReliableTaskEntity::getLastErrorCode, truncate(errorCode, 128))
+                        .set(ReliableTaskEntity::getFinishTime, now)
+                        .set(ReliableTaskEntity::getWorkerId, null)
+                        .set(ReliableTaskEntity::getLockedAt, null)
+                        .set(ReliableTaskEntity::getLockExpireAt, null)
+                        .set(ReliableTaskEntity::getHeartbeatTime, null)
+                        .setSql("version = version + 1")
+                        .set(ReliableTaskEntity::getUpdateTime, now)
         );
         return rows > 0;
     }
@@ -355,10 +436,18 @@ public class MyBatisTaskStore implements TaskStore {
 
     @Override
     public List<TaskInstance> findTimeoutTasks(LocalDateTime timeoutThreshold) {
+        return findTimeoutTasks(timeoutThreshold, MAX_BATCH_QUERY_LIMIT);
+    }
+
+    @Override
+    public List<TaskInstance> findTimeoutTasks(LocalDateTime timeoutThreshold, int limit) {
         List<ReliableTaskEntity> entities = taskMapper.selectList(
                 new LambdaQueryWrapper<ReliableTaskEntity>()
                         .eq(ReliableTaskEntity::getStatus, TaskStatus.RUNNING.getCode())
-                        .lt(ReliableTaskEntity::getLockExpireAt, timeoutThreshold)
+                        .le(ReliableTaskEntity::getLockExpireAt, timeoutThreshold)
+                        .orderByAsc(ReliableTaskEntity::getLockExpireAt)
+                        .orderByAsc(ReliableTaskEntity::getId)
+                        .last("LIMIT " + normalizeBatchLimit(limit))
         );
         return entities.stream()
                 .map(ReliableTaskConverter::toDomain)
@@ -368,17 +457,43 @@ public class MyBatisTaskStore implements TaskStore {
     @Override
     public boolean resetTimeoutTask(Long id) {
         TaskStateMachine.requireTransit(TaskStatus.RUNNING, TaskStatus.PENDING);
+        LocalDateTime now = LocalDateTime.now();
         int rows = taskMapper.update(null,
                 new LambdaUpdateWrapper<ReliableTaskEntity>()
                         .eq(ReliableTaskEntity::getId, id)
                         .eq(ReliableTaskEntity::getStatus, TaskStatus.RUNNING.getCode())
+                        .le(ReliableTaskEntity::getLockExpireAt, now)
                         .set(ReliableTaskEntity::getStatus, TaskStatus.PENDING.getCode())
                         .set(ReliableTaskEntity::getWorkerId, null)
                         .set(ReliableTaskEntity::getLockedAt, null)
                         .set(ReliableTaskEntity::getLockExpireAt, null)
                         .set(ReliableTaskEntity::getHeartbeatTime, null)
-                        .set(ReliableTaskEntity::getNextExecuteTime, LocalDateTime.now())
-                        .set(ReliableTaskEntity::getUpdateTime, LocalDateTime.now())
+                        .set(ReliableTaskEntity::getNextExecuteTime, now)
+                        .setSql("version = version + 1")
+                        .set(ReliableTaskEntity::getUpdateTime, now)
+        );
+        return rows > 0;
+    }
+
+    @Override
+    public boolean resetTimeoutTask(TaskExecutionLease lease) {
+        if (!hasExecutionLeaseIdentity(lease) || lease.getLockExpireAt() == null) {
+            return false;
+        }
+        TaskStateMachine.requireTransit(TaskStatus.RUNNING, TaskStatus.PENDING);
+        LocalDateTime now = LocalDateTime.now();
+        int rows = taskMapper.update(null,
+                executionLeaseWrapper(lease)
+                        .eq(ReliableTaskEntity::getLockExpireAt, lease.getLockExpireAt())
+                        .le(ReliableTaskEntity::getLockExpireAt, now)
+                        .set(ReliableTaskEntity::getStatus, TaskStatus.PENDING.getCode())
+                        .set(ReliableTaskEntity::getWorkerId, null)
+                        .set(ReliableTaskEntity::getLockedAt, null)
+                        .set(ReliableTaskEntity::getLockExpireAt, null)
+                        .set(ReliableTaskEntity::getHeartbeatTime, null)
+                        .set(ReliableTaskEntity::getNextExecuteTime, now)
+                        .setSql("version = version + 1")
+                        .set(ReliableTaskEntity::getUpdateTime, now)
         );
         return rows > 0;
     }
@@ -408,14 +523,16 @@ public class MyBatisTaskStore implements TaskStore {
 
     @Override
     public PageResult<TaskVO> listTasks(TaskQueryRequest request) {
-        Page<ReliableTaskEntity> page = new Page<>(request.getPageNum(), request.getPageSize());
-        LambdaQueryWrapper<ReliableTaskEntity> wrapper = buildQueryWrapper(request);
+        TaskQueryRequest effectiveRequest = request != null ? request : new TaskQueryRequest();
+        int pageNum = effectiveRequest.normalizedPageNum();
+        int pageSize = effectiveRequest.normalizedPageSize(MAX_PAGE_SIZE);
+        Page<ReliableTaskEntity> page = new Page<>(pageNum, pageSize);
+        LambdaQueryWrapper<ReliableTaskEntity> wrapper = buildQueryWrapper(effectiveRequest);
         wrapper.orderByDesc(ReliableTaskEntity::getId);
 
         Page<ReliableTaskEntity> result = taskMapper.selectPage(page, wrapper);
         List<TaskVO> voList = ReliableTaskConverter.toTaskVOList(result.getRecords());
-        return PageResult.of(voList, result.getTotal(),
-                request.getPageNum(), request.getPageSize());
+        return PageResult.of(voList, result.getTotal(), pageNum, pageSize);
     }
 
     @Override
@@ -476,9 +593,24 @@ public class MyBatisTaskStore implements TaskStore {
         );
         stats.setTodayFailedTasks(todayFailed);
 
+        stats.setOldestPendingAgeSeconds(resolveOldestPendingAgeSeconds());
         stats.setTaskTypeStats(parseTaskTypeCount(taskMapper.countByTaskType()));
 
         return stats;
+    }
+
+    private long resolveOldestPendingAgeSeconds() {
+        ReliableTaskEntity oldest = taskMapper.selectOne(
+                new LambdaQueryWrapper<ReliableTaskEntity>()
+                        .in(ReliableTaskEntity::getStatus,
+                                TaskStatus.PENDING.getCode(), TaskStatus.RETRYING.getCode())
+                        .orderByAsc(ReliableTaskEntity::getCreateTime)
+                        .last("LIMIT 1")
+        );
+        if (oldest == null || oldest.getCreateTime() == null) {
+            return 0L;
+        }
+        return Math.max(Duration.between(oldest.getCreateTime(), LocalDateTime.now()).getSeconds(), 0L);
     }
 
     // ==================== V2 运维能力 ====================
@@ -568,9 +700,11 @@ public class MyBatisTaskStore implements TaskStore {
                                               int pageNum,
                                               int pageSize) {
         if (auditLogMapper == null) {
-            return PageResult.of(List.of(), 0, pageNum, pageSize);
+            return PageResult.of(List.of(), 0, normalizePageNum(pageNum), normalizePageSize(pageSize));
         }
-        Page<ReliableTaskAuditLogEntity> page = new Page<>(Math.max(pageNum, 1), Math.max(pageSize, 1));
+        int normalizedPageNum = normalizePageNum(pageNum);
+        int normalizedPageSize = normalizePageSize(pageSize);
+        Page<ReliableTaskAuditLogEntity> page = new Page<>(normalizedPageNum, normalizedPageSize);
         LambdaQueryWrapper<ReliableTaskAuditLogEntity> wrapper =
                 new LambdaQueryWrapper<ReliableTaskAuditLogEntity>()
                         .orderByDesc(ReliableTaskAuditLogEntity::getCreateTime);
@@ -688,11 +822,39 @@ public class MyBatisTaskStore implements TaskStore {
         }
     }
 
+    private boolean hasExecutionLeaseIdentity(TaskExecutionLease lease) {
+        return lease != null
+                && lease.getTaskId() != null
+                && lease.getWorkerId() != null
+                && !lease.getWorkerId().isBlank()
+                && lease.getVersion() != null;
+    }
+
+    private LambdaUpdateWrapper<ReliableTaskEntity> executionLeaseWrapper(TaskExecutionLease lease) {
+        return new LambdaUpdateWrapper<ReliableTaskEntity>()
+                .eq(ReliableTaskEntity::getId, lease.getTaskId())
+                .eq(ReliableTaskEntity::getStatus, TaskStatus.RUNNING.getCode())
+                .eq(ReliableTaskEntity::getWorkerId, lease.getWorkerId())
+                .eq(ReliableTaskEntity::getVersion, lease.getVersion())
+                .eq(lease.getLockedAt() != null, ReliableTaskEntity::getLockedAt, lease.getLockedAt());
+    }
+
     private int normalizeBatchLimit(int limit) {
         if (limit <= 0) {
             return 100;
         }
         return Math.min(limit, MAX_BATCH_QUERY_LIMIT);
+    }
+
+    private int normalizePageNum(int pageNum) {
+        return pageNum <= 0 ? TaskQueryRequest.DEFAULT_PAGE_NUM : pageNum;
+    }
+
+    private int normalizePageSize(int pageSize) {
+        if (pageSize <= 0) {
+            return TaskQueryRequest.DEFAULT_PAGE_SIZE;
+        }
+        return Math.min(pageSize, MAX_PAGE_SIZE);
     }
 
     private Map<Integer, Long> parseStatusCount(List<Map<String, Object>> statusRows) {

@@ -66,7 +66,7 @@ public class OrderService {
     /**
      * 重复投递示例。
      *
-     * <p>V1.5 MVP 中同一 bizUniqueKey 永久只保留一条任务，第二次投递返回同一个 taskId。
+     * <p>同一显式 idempotencyKey 永久只保留一条任务，第二次投递返回同一个 taskId。
      */
     @Transactional(rollbackFor = Exception.class)
     public Map<String, String> createDuplicateOrder(String orderNo, String buyerId) {
@@ -86,6 +86,7 @@ public class OrderService {
                 .taskType("CREATE_SHIPMENT")
                 .bizType("ORDER")
                 .bizId(orderNo)
+                .idempotencyKey(shipmentIdempotencyKey(orderNo))
                 .maxRetryCount(3)
                 .retryIntervalMs(2000L)
                 .build(), payload);
@@ -97,8 +98,13 @@ public class OrderService {
                 .taskType("CREATE_SHIPMENT")
                 .bizType("ORDER")
                 .bizId(orderNo)
+                .idempotencyKey(shipmentIdempotencyKey(orderNo))
                 .maxRetryCount(3)
                 .retryIntervalMs(2000L)
                 .build(), payload);
+    }
+
+    private String shipmentIdempotencyKey(String orderNo) {
+        return "shipment:order:" + orderNo;
     }
 }

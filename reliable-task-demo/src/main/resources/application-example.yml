@@ -45,8 +45,6 @@ reliable-task:
     scan-interval-ms: 30000
   idempotency:
     strategy: STRICT_UNIQUE
-  serializer:
-    type: JACKSON
   executor:
     default-core-size: 4
     default-max-size: 16
@@ -59,6 +57,7 @@ reliable-task:
         queue-capacity: 200
   admin:
     enabled: true
+    write-enabled: true
     audit:
       enabled: false
     auth:

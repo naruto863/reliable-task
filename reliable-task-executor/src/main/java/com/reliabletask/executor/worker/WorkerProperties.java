@@ -26,6 +26,11 @@ public class WorkerProperties {
     private int batchSize = 10;
 
     /**
+     * 单次拉取任务数量上限，默认 1000
+     */
+    private int maxBatchSize = 1000;
+
+    /**
      * 任务初始锁 TTL，单位秒，默认 300
      */
     private long lockTtlSeconds = 300L;

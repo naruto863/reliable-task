@@ -22,6 +22,19 @@ public interface RetryStrategy {
     RetryStrategyType getType();
 
     /**
+     * 获取此策略的稳定名称。
+     *
+     * <p>默认使用 {@link #getType()} 的枚举名称。自定义策略可覆盖该方法，
+     * 用于注册一个更具体的业务名称。
+     *
+     * @return 稳定策略名称
+     */
+    default String getName() {
+        RetryStrategyType type = getType();
+        return type == null ? null : type.name();
+    }
+
+    /**
      * 计算下一次重试的延迟时间
      *
      * <p>状态流转说明:

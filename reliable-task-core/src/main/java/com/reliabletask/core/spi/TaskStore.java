@@ -5,6 +5,7 @@ import com.reliabletask.core.dto.TaskQueryRequest;
 import com.reliabletask.core.enums.TaskStatus;
 import com.reliabletask.core.model.AuditLog;
 import com.reliabletask.core.model.BatchOperationResult;
+import com.reliabletask.core.model.TaskExecutionLease;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.WorkerHeartbeat;
 import com.reliabletask.core.vo.TaskDetailVO;
@@ -137,6 +138,22 @@ public interface TaskStore {
     boolean markSuccess(Long id);
 
     /**
+     * 基于执行租约更新任务为成功状态。
+     *
+     * <p>默认兼容实现只使用 taskId 并委托旧接口；支持租约 CAS 的存储实现应覆盖此方法，
+     * 并在 WHERE 条件中校验 workerId、lockedAt、lockExpireAt 或 version。
+     *
+     * @param lease 执行租约
+     * @return 是否更新成功
+     */
+    default boolean markSuccess(TaskExecutionLease lease) {
+        if (lease == null || lease.getTaskId() == null) {
+            return false;
+        }
+        return markSuccess(lease.getTaskId());
+    }
+
+    /**
      * 更新任务为等待重试状态
      *
      * <p>状态流转: RUNNING → RETRYING
@@ -164,6 +181,42 @@ public interface TaskStore {
     }
 
     /**
+     * 基于执行租约更新任务为等待重试状态。
+     *
+     * <p>默认兼容实现只使用 taskId 并委托旧接口；支持租约 CAS 的存储实现应覆盖此方法。
+     *
+     * @param lease           执行租约
+     * @param errorMsg        错误信息
+     * @param nextExecuteTime 下次执行时间
+     * @return 是否更新成功
+     */
+    default boolean markWaitRetry(TaskExecutionLease lease, String errorMsg, LocalDateTime nextExecuteTime) {
+        if (lease == null || lease.getTaskId() == null) {
+            return false;
+        }
+        return markWaitRetry(lease.getTaskId(), errorMsg, nextExecuteTime);
+    }
+
+    /**
+     * 基于执行租约更新任务为等待重试状态，并记录最近错误码。
+     *
+     * <p>默认兼容实现只使用 taskId 并委托旧接口；支持租约 CAS 的存储实现应覆盖此方法。
+     *
+     * @param lease           执行租约
+     * @param errorCode       错误码或异常类型
+     * @param errorMsg        错误信息
+     * @param nextExecuteTime 下次执行时间
+     * @return 是否更新成功
+     */
+    default boolean markWaitRetry(TaskExecutionLease lease, String errorCode, String errorMsg,
+                                  LocalDateTime nextExecuteTime) {
+        if (lease == null || lease.getTaskId() == null) {
+            return false;
+        }
+        return markWaitRetry(lease.getTaskId(), errorCode, errorMsg, nextExecuteTime);
+    }
+
+    /**
      * 更新任务为死信状态
      *
      * <p>状态流转: RUNNING → DEAD 或 RETRYING → DEAD
@@ -186,6 +239,39 @@ public interface TaskStore {
      */
     default boolean markDead(Long id, String errorCode, String errorMsg) {
         return markDead(id, errorMsg);
+    }
+
+    /**
+     * 基于执行租约更新任务为死信状态。
+     *
+     * <p>默认兼容实现只使用 taskId 并委托旧接口；支持租约 CAS 的存储实现应覆盖此方法。
+     *
+     * @param lease    执行租约
+     * @param errorMsg 错误信息
+     * @return 是否更新成功
+     */
+    default boolean markDead(TaskExecutionLease lease, String errorMsg) {
+        if (lease == null || lease.getTaskId() == null) {
+            return false;
+        }
+        return markDead(lease.getTaskId(), errorMsg);
+    }
+
+    /**
+     * 基于执行租约更新任务为死信状态，并记录最近错误码。
+     *
+     * <p>默认兼容实现只使用 taskId 并委托旧接口；支持租约 CAS 的存储实现应覆盖此方法。
+     *
+     * @param lease     执行租约
+     * @param errorCode 错误码或异常类型
+     * @param errorMsg  错误信息
+     * @return 是否更新成功
+     */
+    default boolean markDead(TaskExecutionLease lease, String errorCode, String errorMsg) {
+        if (lease == null || lease.getTaskId() == null) {
+            return false;
+        }
+        return markDead(lease.getTaskId(), errorCode, errorMsg);
     }
 
     /**
@@ -228,13 +314,31 @@ public interface TaskStore {
     /**
      * 查找执行超时的任务
      *
-     * <p>查找 RUNNING 状态且 lockExpireAt 早于指定时间的任务，
+     * <p>查找 RUNNING 状态且 lockExpireAt 小于等于指定时间的任务，
      * 这些任务可能是 Worker 崩溃后遗留的孤儿任务。
      *
-     * @param timeoutThreshold 超时阈值（如 5 分钟前）
+     * @param timeoutThreshold 锁过期阈值（通常为当前时间）
      * @return 超时的任务列表
      */
     List<TaskInstance> findTimeoutTasks(LocalDateTime timeoutThreshold);
+
+    /**
+     * 查找执行超时的任务，并限制单次扫描数量。
+     *
+     * <p>默认兼容实现会委托旧接口后在内存中截断；存储实现应覆盖此方法，
+     * 在查询层使用稳定排序和 limit，避免一次扫描加载过多 RUNNING 任务。
+     *
+     * @param timeoutThreshold 超时阈值
+     * @param limit            最大返回数量
+     * @return 超时的任务列表
+     */
+    default List<TaskInstance> findTimeoutTasks(LocalDateTime timeoutThreshold, int limit) {
+        List<TaskInstance> tasks = findTimeoutTasks(timeoutThreshold);
+        if (tasks == null || limit <= 0 || tasks.size() <= limit) {
+            return tasks;
+        }
+        return tasks.subList(0, limit);
+    }
 
     /**
      * 重置超时任务为 PENDING 状态
@@ -248,6 +352,22 @@ public interface TaskStore {
      * @return 是否重置成功
      */
     boolean resetTimeoutTask(Long id);
+
+    /**
+     * 基于执行租约重置超时任务为 PENDING 状态。
+     *
+     * <p>默认兼容实现只使用 taskId 并委托旧接口；支持租约 CAS 的存储实现应覆盖此方法，
+     * 并校验被恢复的仍是同一份过期租约。
+     *
+     * @param lease 执行租约
+     * @return 是否重置成功
+     */
+    default boolean resetTimeoutTask(TaskExecutionLease lease) {
+        if (lease == null || lease.getTaskId() == null) {
+            return false;
+        }
+        return resetTimeoutTask(lease.getTaskId());
+    }
 
     // ==================== 日志记录 ====================
 

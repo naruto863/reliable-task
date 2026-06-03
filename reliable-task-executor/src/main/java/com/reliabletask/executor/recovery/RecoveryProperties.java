@@ -22,9 +22,10 @@ public class RecoveryProperties {
     private long intervalMs = 30000L;
 
     /**
-     * 任务超时阈值，单位秒，默认 300（5 分钟）
+     * 兼容保留的任务超时阈值，单位秒，默认 300（5 分钟）
      *
-     * <p>RUNNING 状态且超过此时间未更新的任务会被重置为 PENDING。
+     * <p>当前恢复语义以任务行的 lockExpireAt 为准：RUNNING 且 lockExpireAt <= now 的任务才会被重置。
+     * 本字段保留给已有配置和后续宽限期设计，不再叠加到 lockExpireAt 之后形成二次等待。
      */
     private long timeoutSeconds = 300L;
 

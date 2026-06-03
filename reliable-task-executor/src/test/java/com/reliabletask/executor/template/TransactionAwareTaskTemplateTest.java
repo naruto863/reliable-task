@@ -1,7 +1,10 @@
 package com.reliabletask.executor.template;
 
 import com.reliabletask.core.enums.RetryStrategyType;
+import com.reliabletask.core.enums.TaskEventType;
 import com.reliabletask.core.enums.TaskStatus;
+import com.reliabletask.core.event.TaskEventPublisher;
+import com.reliabletask.core.model.TaskEvent;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.TaskSubmitRequest;
 import com.reliabletask.core.model.TaskSubmitResult;
@@ -20,6 +23,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -87,6 +91,31 @@ class TransactionAwareTaskTemplateTest {
     }
 
     @Test
+    @DisplayName("submitForResult - 新任务发布 SUBMITTED 事件")
+    void submitForResult_newTask_publishesSubmittedEvent() {
+        List<TaskEvent> events = new ArrayList<>();
+        template = new TransactionAwareTaskTemplate(taskStore, List.of(new StrictUniqueIdempotencyStrategy()),
+                StrictUniqueIdempotencyStrategy.NAME, new com.reliabletask.executor.serializer.JacksonTaskPayloadSerializer(),
+                null, new TaskEventPublisher(List.of(events::add)));
+        when(taskStore.save(any())).thenAnswer(invocation -> {
+            TaskInstance task = invocation.getArgument(0);
+            task.setId(1L);
+            return task;
+        });
+
+        template.submitForResult(validRequest);
+
+        assertEquals(1, events.size());
+        TaskEvent event = events.get(0);
+        assertEquals(TaskEventType.SUBMITTED, event.getEventType());
+        assertEquals(1L, event.getTaskId());
+        assertNull(event.getStatusBefore());
+        assertEquals(TaskStatus.PENDING, event.getStatusAfter());
+        assertEquals("CREATE_SHIPMENT", event.getTaskType());
+        assertEquals("ORD-001", event.getBizId());
+    }
+
+    @Test
     @DisplayName("submitForResult - STRICT_UNIQUE 命中已有任务不重复保存")
     void submitForResult_strictUniqueHit_returnsExisting() {
         when(taskStore.getByBizUniqueKey("CREATE_SHIPMENT:ORDER:ORD-001"))
@@ -97,6 +126,42 @@ class TransactionAwareTaskTemplateTest {
         assertEquals("99", result.getResultId());
         assertFalse(result.isCreated());
         assertTrue(result.isExisting());
+        verify(taskStore, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("submitForResult - 显式 idempotencyKey 作为入库幂等键")
+    void submitForResult_explicitIdempotencyKey_usesExplicitKey() {
+        validRequest.setIdempotencyKey("shipment:order:ORD-001");
+        when(taskStore.save(any())).thenAnswer(invocation -> {
+            TaskInstance task = invocation.getArgument(0);
+            task.setId(10L);
+            return task;
+        });
+
+        TaskSubmitResult result = template.submitForResult(validRequest);
+
+        assertTrue(result.isCreated());
+        assertEquals("shipment:order:ORD-001", result.getBizUniqueKey());
+        verify(taskStore).getByBizUniqueKey("shipment:order:ORD-001");
+        ArgumentCaptor<TaskInstance> captor = ArgumentCaptor.forClass(TaskInstance.class);
+        verify(taskStore).save(captor.capture());
+        assertEquals("shipment:order:ORD-001", captor.getValue().getBizUniqueKey());
+    }
+
+    @Test
+    @DisplayName("submitForResult - 显式 idempotencyKey 命中已有任务")
+    void submitForResult_explicitIdempotencyKeyHit_returnsExisting() {
+        validRequest.setIdempotencyKey("shipment:order:ORD-001");
+        when(taskStore.getByBizUniqueKey("shipment:order:ORD-001"))
+                .thenReturn(TaskInstance.builder().id(88L).status(TaskStatus.PENDING).build());
+
+        TaskSubmitResult result = template.submitForResult(validRequest);
+
+        assertEquals("88", result.getResultId());
+        assertFalse(result.isCreated());
+        assertTrue(result.isExisting());
+        assertEquals("shipment:order:ORD-001", result.getBizUniqueKey());
         verify(taskStore, never()).save(any());
     }
 
@@ -124,6 +189,23 @@ class TransactionAwareTaskTemplateTest {
         verify(taskStore).save(captor.capture());
         assertTrue(captor.getValue().getBizUniqueKey()
                 .startsWith("CREATE_SHIPMENT:ORDER:ORD-001:RERUN:99:"));
+    }
+
+    @Test
+    @DisplayName("submitForResult - 策略改写后的过长 bizUniqueKey 抛异常")
+    void submitForResult_strategyGeneratedTooLongBizUniqueKey_throwsException() {
+        List<IdempotencyStrategy> strategies = List.of(
+                new StrictUniqueIdempotencyStrategy(),
+                new AllowAfterTerminalIdempotencyStrategy());
+        template = new TransactionAwareTaskTemplate(taskStore, strategies, StrictUniqueIdempotencyStrategy.NAME);
+        String idempotencyKey = "x".repeat(250);
+        validRequest.setIdempotencyKey(idempotencyKey);
+        validRequest.setIdempotencyStrategy(AllowAfterTerminalIdempotencyStrategy.NAME);
+        when(taskStore.getByBizUniqueKey(idempotencyKey))
+                .thenReturn(TaskInstance.builder().id(99L).status(TaskStatus.SUCCESS).build());
+
+        assertThrows(IllegalArgumentException.class, () -> template.submitForResult(validRequest));
+        verify(taskStore, never()).save(any());
     }
 
     @Test
@@ -342,6 +424,20 @@ class TransactionAwareTaskTemplateTest {
     @DisplayName("submit - null payload 抛异常")
     void submit_nullPayload_throwsException() {
         validRequest.setPayload(null);
+        assertThrows(IllegalArgumentException.class, () -> template.submit(validRequest));
+    }
+
+    @Test
+    @DisplayName("submit - 空白 idempotencyKey 抛异常")
+    void submit_blankIdempotencyKey_throwsException() {
+        validRequest.setIdempotencyKey("   ");
+        assertThrows(IllegalArgumentException.class, () -> template.submit(validRequest));
+    }
+
+    @Test
+    @DisplayName("submit - 过长 idempotencyKey 抛异常")
+    void submit_tooLongIdempotencyKey_throwsException() {
+        validRequest.setIdempotencyKey("x".repeat(257));
         assertThrows(IllegalArgumentException.class, () -> template.submit(validRequest));
     }
 

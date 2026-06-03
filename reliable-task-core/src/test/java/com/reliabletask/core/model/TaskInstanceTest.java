@@ -115,11 +115,13 @@ class TaskInstanceTest {
                 .maxRetryCount(5)
                 .retryStrategy(RetryStrategyType.FIXED)
                 .retryIntervalMs(2000L)
+                .idempotencyKey("shipment:ORD-001")
                 .shardKey("user-123")
                 .tenantId("tenant-1")
                 .build();
 
         assertEquals("CREATE_SHIPMENT", request.getTaskType());
+        assertEquals("shipment:ORD-001", request.getIdempotencyKey());
         assertEquals(1, request.getPriority());
         assertEquals(5, request.getMaxRetryCount());
         assertEquals(RetryStrategyType.FIXED, request.getRetryStrategy());

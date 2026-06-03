@@ -1,6 +1,9 @@
 package com.reliabletask.executor.worker;
 
 import com.reliabletask.core.enums.TaskStatus;
+import com.reliabletask.core.enums.TaskEventType;
+import com.reliabletask.core.event.TaskEventPublisher;
+import com.reliabletask.core.model.TaskEvent;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.WorkerHeartbeat;
 import com.reliabletask.core.spi.TaskStore;
@@ -14,6 +17,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.util.ArrayList;
 import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -67,6 +71,18 @@ class WorkerSchedulerTest {
     }
 
     @Test
+    @DisplayName("pollAndExecute - batchSize 超过上限时按 maxBatchSize 拉取")
+    void pollAndExecute_batchSizeExceedsMax_fetchesMaxBatchSize() {
+        properties.setBatchSize(5000);
+        properties.setMaxBatchSize(100);
+        when(taskStore.fetchPendingTasks(100)).thenReturn(List.of());
+
+        scheduler.pollAndExecute();
+
+        verify(taskStore).fetchPendingTasks(100);
+    }
+
+    @Test
     @DisplayName("pollAndExecute - store 返回 null 时按空列表处理")
     void pollAndExecute_nullPendingTasks_noClaim() {
         when(taskStore.fetchPendingTasks(10)).thenReturn(null);
@@ -87,10 +103,20 @@ class WorkerSchedulerTest {
                 .bizId("BIZ-1")
                 .status(TaskStatus.PENDING)
                 .build();
+        TaskInstance claimedTask = TaskInstance.builder()
+                .id(1L)
+                .taskType("TYPE_A")
+                .bizId("BIZ-1")
+                .status(TaskStatus.RUNNING)
+                .workerId("worker-claimed")
+                .lockedAt(LocalDateTime.now())
+                .lockExpireAt(LocalDateTime.now().plusSeconds(45))
+                .version(2)
+                .build();
 
         when(taskStore.fetchPendingTasks(10)).thenReturn(List.of(task));
         when(taskStore.claimTask(eq(1L), anyString(), any(LocalDateTime.class))).thenReturn(true);
-        when(taskStore.getById(1L)).thenReturn(task);
+        when(taskStore.getById(1L)).thenReturn(claimedTask);
 
         scheduler.pollAndExecute();
 
@@ -99,7 +125,62 @@ class WorkerSchedulerTest {
             long seconds = java.time.Duration.between(LocalDateTime.now(), lockExpireAt).toSeconds();
             return seconds >= 43 && seconds <= 45;
         }));
-        verify(taskExecutor).execute(task);
+        verify(taskExecutor).execute(claimedTask);
+    }
+
+    @Test
+    @DisplayName("pollAndExecute - 抢占成功后发布 STARTED 事件")
+    void pollAndExecute_claimSuccess_publishesStartedEvent() {
+        List<TaskEvent> events = new ArrayList<>();
+        scheduler = new WorkerScheduler(taskStore, properties, taskExecutor,
+                new TaskEventPublisher(List.of(events::add)));
+        TaskInstance task = TaskInstance.builder()
+                .id(11L)
+                .taskType("TYPE_A")
+                .bizId("BIZ-11")
+                .status(TaskStatus.RETRYING)
+                .build();
+        TaskInstance claimedTask = TaskInstance.builder()
+                .id(11L)
+                .taskType("TYPE_A")
+                .bizId("BIZ-11")
+                .status(TaskStatus.RUNNING)
+                .workerId("worker-claimed")
+                .traceId("trace-11")
+                .build();
+        when(taskStore.fetchPendingTasks(10)).thenReturn(List.of(task));
+        when(taskStore.claimTask(eq(11L), anyString(), any(LocalDateTime.class))).thenReturn(true);
+        when(taskStore.getById(11L)).thenReturn(claimedTask);
+
+        scheduler.pollAndExecute();
+
+        assertEquals(1, events.size());
+        TaskEvent event = events.get(0);
+        assertEquals(TaskEventType.STARTED, event.getEventType());
+        assertEquals(TaskStatus.RETRYING, event.getStatusBefore());
+        assertEquals(TaskStatus.RUNNING, event.getStatusAfter());
+        assertEquals("worker-claimed", event.getWorkerId());
+        assertEquals("trace-11", event.getTraceId());
+    }
+
+    @Test
+    @DisplayName("pollAndExecute - 抢占后无法读取最新租约则不执行")
+    void pollAndExecute_claimedTaskMissing_doesNotExecuteWithoutLease() {
+        TaskInstance task = TaskInstance.builder()
+                .id(1L)
+                .taskType("TYPE_A")
+                .bizId("BIZ-1")
+                .status(TaskStatus.PENDING)
+                .build();
+
+        when(taskStore.fetchPendingTasks(10)).thenReturn(List.of(task));
+        when(taskStore.claimTask(eq(1L), anyString(), any(LocalDateTime.class))).thenReturn(true);
+        when(taskStore.getById(1L)).thenReturn(null);
+
+        scheduler.pollAndExecute();
+
+        verify(taskStore).getById(1L);
+        verify(taskExecutor, never()).execute(any());
     }
 
     @Test

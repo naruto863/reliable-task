@@ -49,6 +49,11 @@ public class TaskStatsVO {
     private long deadTasks;
 
     /**
+     * 最老待执行任务年龄（秒，PENDING + RETRYING）
+     */
+    private long oldestPendingAgeSeconds;
+
+    /**
      * 按 taskType 分组的任务数
      * key: taskType, value: 该类型的任务总数
      */

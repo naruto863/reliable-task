@@ -3,9 +3,13 @@ package com.reliabletask.admin.controller;
 import com.reliabletask.admin.model.Result;
 import com.reliabletask.core.dto.PageResult;
 import com.reliabletask.core.dto.TaskQueryRequest;
+import com.reliabletask.core.enums.TaskEventType;
 import com.reliabletask.core.enums.TaskStatus;
+import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.model.AuditLog;
 import com.reliabletask.core.model.BatchOperationResult;
+import com.reliabletask.core.model.TaskEvent;
+import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.WorkerHeartbeat;
 import com.reliabletask.core.spi.TaskAuthorizationProvider;
 import com.reliabletask.core.spi.TaskStore;
@@ -20,6 +24,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -79,6 +84,24 @@ class TaskAdminControllerTest {
     }
 
     @Test
+    @DisplayName("listTasks - pageSize 超限时裁剪到 Admin 上限")
+    void listTasks_clampsPageSize() {
+        PageResult<TaskVO> expected = PageResult.of(List.of(), 0, 1, 200);
+        when(taskStore.listTasks(any())).thenReturn(expected);
+
+        controller.listTasks(
+                0, 5000, null,
+                null, null, null, null,
+                null, null, null, null, "viewer"
+        );
+
+        ArgumentCaptor<TaskQueryRequest> captor = ArgumentCaptor.forClass(TaskQueryRequest.class);
+        verify(taskStore).listTasks(captor.capture());
+        assertEquals(1, captor.getValue().getPageNum());
+        assertEquals(200, captor.getValue().getPageSize());
+    }
+
+    @Test
     @DisplayName("getTaskDetail - 不存在返回 404")
     void getTaskDetail_notFound_returns404() {
         when(taskStore.getTaskDetail(99L)).thenReturn(null);
@@ -116,6 +139,33 @@ class TaskAdminControllerTest {
         assertEquals("TASK_CANCEL", captor.getValue().getOperationType());
         assertEquals("admin", captor.getValue().getOperator());
         assertEquals("SUCCESS", captor.getValue().getResult());
+    }
+
+    @Test
+    @DisplayName("cancel - 成功后发布 CANCELLED 事件")
+    void cancel_allowed_publishesCancelledEvent() {
+        List<TaskEvent> events = new ArrayList<>();
+        controller = new TaskAdminController(taskStore, false, null, 60L, true, true,
+                200, 1000, true, new TaskEventPublisher(List.of(events::add)));
+        when(taskStore.getById(1L)).thenReturn(TaskInstance.builder()
+                .id(1L)
+                .taskType("TYPE_A")
+                .bizId("BIZ-1")
+                .status(TaskStatus.RETRYING)
+                .traceId("trace-task")
+                .build());
+        when(taskStore.cancelTask(1L)).thenReturn(true);
+
+        Result<Boolean> result = controller.cancel(1L, "admin", "trace-1");
+
+        assertEquals(200, result.getCode());
+        assertEquals(1, events.size());
+        TaskEvent event = events.get(0);
+        assertEquals(TaskEventType.CANCELLED, event.getEventType());
+        assertEquals(TaskStatus.RETRYING, event.getStatusBefore());
+        assertEquals(TaskStatus.CANCELLED, event.getStatusAfter());
+        assertEquals("TYPE_A", event.getTaskType());
+        assertEquals("trace-1", event.getTraceId());
     }
 
     @Test
@@ -170,6 +220,20 @@ class TaskAdminControllerTest {
     }
 
     @Test
+    @DisplayName("write disabled - 写操作返回 404 且不调用 store")
+    void writeDisabled_rejectsWriteOperation() {
+        controller = new TaskAdminController(taskStore, false, null, 60L, true, true,
+                200, 1000, false);
+
+        Result<Boolean> result = controller.cancel(1L, "admin", "trace-1");
+
+        assertEquals(404, result.getCode());
+        assertTrue(result.getMessage().contains("write operation is disabled"));
+        verify(taskStore, never()).cancelTask(1L);
+        verify(taskStore, never()).saveAuditLog(any(AuditLog.class));
+    }
+
+    @Test
     @DisplayName("audit disabled - 审计查询接口返回 404")
     void auditDisabled_auditQueryReturnsNotFound() {
         controller = new TaskAdminController(taskStore, false, null, 60L, false, true);
@@ -190,6 +254,19 @@ class TaskAdminControllerTest {
 
         assertEquals(200, result.getCode());
         assertSame(logs, result.getData());
+    }
+
+    @Test
+    @DisplayName("listAuditLogs - pageSize 超限时裁剪到 Admin 上限")
+    void listAuditLogs_clampsPageSize() {
+        when(taskStore.listAuditLogs(null, null, null, 1, 200))
+                .thenReturn(PageResult.of(List.of(), 0, 1, 200));
+
+        Result<PageResult<AuditLog>> result = controller.listAuditLogs(
+                null, null, null, 0, 5000, "auditor");
+
+        assertEquals(200, result.getCode());
+        verify(taskStore).listAuditLogs(null, null, null, 1, 200);
     }
 
     @Test
@@ -297,6 +374,25 @@ class TaskAdminControllerTest {
         assertEquals(1, result.getData().getFailCount());
         verify(taskStore).updateBatchOperationResult(any(BatchOperationResult.class));
         verify(taskStore).saveAuditLog(any(AuditLog.class));
+    }
+
+    @Test
+    @DisplayName("batchRequeue - limit 超限时裁剪到 Admin 批量上限")
+    void batchRequeue_clampsLimit() {
+        when(taskStore.findOperableTaskIds("TYPE_A", TaskStatus.DEAD, null, null, 1000))
+                .thenReturn(List.of());
+        when(taskStore.createBatchOperation(any(), any(), any(), any(), any(), any(),
+                eq(1000), anyBoolean(), any(), any()))
+                .thenReturn(103L);
+
+        Result<BatchOperationResult> result = controller.batchRequeue(
+                new TaskAdminController.BatchOperationRequest("TYPE_A", null, null, null, 5000, false),
+                "ops", "trace-batch");
+
+        assertEquals(200, result.getCode());
+        verify(taskStore).findOperableTaskIds("TYPE_A", TaskStatus.DEAD, null, null, 1000);
+        verify(taskStore).createBatchOperation(any(), any(), any(), any(), any(), any(),
+                eq(1000), anyBoolean(), any(), any());
     }
 
     @Test

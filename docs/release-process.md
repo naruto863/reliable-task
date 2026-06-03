@@ -27,8 +27,21 @@
 - [ ] 准备 `docs/releases/vX.Y.Z.md` 作为 GitHub Release Notes。
 - [ ] 将根 `pom.xml` 和各模块版本从 `X.Y.Z-SNAPSHOT` 调整为 `X.Y.Z`。
 - [ ] 执行 `mvn -B test` 并确认通过。
+- [ ] 至少执行一种真实 MySQL 集成测试：`mvn -B -Pmysql-it -pl reliable-task-store,reliable-task-executor -am test`，或在专用本地 MySQL 测试库上执行 `mvn -B -Pmysql-local-it -pl reliable-task-store,reliable-task-executor -am test`。
+- [ ] 如果 Docker/Testcontainers 或本地 MySQL 环境不可用，必须在发布记录中单独写明阻塞证据和未验证范围，不能把跳过的集成测试写成通过。
+- [ ] 更新或引用 `docs/review/RELIABLE_TASK_V03_V04_READINESS_REPORT.md`，确认 release notes 中的验证状态与 readiness 事实一致。
 - [ ] 确认 README 快速开始、Demo 文档和安全说明与当前版本一致。
 - [ ] 确认 `SECURITY.md` 中的安全联系方式和 GitHub Security Advisory 链接，且没有内部地址。
+
+## 测试分层
+
+| 层级 | 命令 | 默认 CI | 说明 |
+| --- | --- | --- | --- |
+| 基础单元/自动配置/H2 schema | `mvn -B test` | 是，PR 和 push 自动执行 | 不依赖 Docker 或本地 MySQL，是最低合入门槛。 |
+| Testcontainers MySQL 集成测试 | `mvn -B -Pmysql-it -pl reliable-task-store,reliable-task-executor -am test` | 否，可通过 GitHub Actions `workflow_dispatch` 手动开启 | 需要 Docker，用于验证真实 MySQL 唯一键、事务、并发 claim、租约 CAS 和恢复语义。 |
+| 本地 MySQL 集成测试 | `mvn -B -Pmysql-local-it -pl reliable-task-store,reliable-task-executor -am test` | 否，仅本地或专用环境 | 需要设置 `RELIABLE_TASK_IT_JDBC_URL`、`RELIABLE_TASK_IT_USERNAME`、`RELIABLE_TASK_IT_PASSWORD`，只允许连接可丢弃的集成测试库。 |
+
+基础 CI 必须保持轻量稳定，不应因为 Docker、Testcontainers 镜像拉取、本地 MySQL 或专用网络不可用而阻塞普通 PR。发布前验收需要补充至少一种真实 MySQL profile；若被环境阻塞，应按“已通过 / 未执行 / 阻塞原因 / 推荐恢复步骤”分层记录。
 
 ## 发布命令
 
@@ -37,6 +50,7 @@ git checkout main
 git pull --ff-only origin main
 git status
 mvn -B test
+mvn -B -Pmysql-it -pl reliable-task-store,reliable-task-executor -am test
 
 git add CHANGELOG.md docs/releases/v0.1.0.md README.md .env.example SECURITY.md docs/release-process.md docs/open-source-check-report.md pom.xml reliable-task-*/pom.xml
 git commit -m "docs(release): prepare v0.1.0"
@@ -82,6 +96,7 @@ GitHub Release 内容以 `docs/releases/vX.Y.Z.md` 为准。Release Notes 应面
 - [ ] GitHub Release 页面标题、说明、Tag 和源码包正确。
 - [ ] Release Notes 展示正常。
 - [ ] 从 Tag 重新检出后可以执行 `mvn -B test`。
+- [ ] 从 Tag 重新检出后至少一种真实 MySQL 集成测试 profile 通过，或发布记录明确说明环境阻塞和未验证范围。
 - [ ] 源码包不包含 `.env`、本地 `application.yml`、IDE 配置、`.m2`、`target`。
 - [ ] Issue 模板、PR 模板和 CI 在 GitHub 页面可用。
 - [ ] README 中的快速开始、配置示例、License、Security 链接可访问。

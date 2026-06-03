@@ -19,11 +19,13 @@ recovers timed-out executions, and exposes admin APIs for operational visibility
 - [Why ReliableTask](#why-reliabletask)
 - [Features](#features)
 - [Architecture](#architecture)
+- [Reliability Semantics](#reliability-semantics)
 - [Modules](#modules)
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
 - [Installation](#installation)
 - [Configuration](#configuration)
+- [Production Checklist](#production-checklist)
 - [Security](#security)
 - [Testing](#testing)
 - [FAQ](#faq)
@@ -46,11 +48,13 @@ write the business record and the task record in one transaction, then let worke
 | Transactional task submission | Submit reliable asynchronous tasks in the same transaction as business data. |
 | Database-backed lifecycle | Store task state, logs, worker heartbeat, audit logs, and batch operation records in MySQL. |
 | Explicit state machine | Centralize legal transitions such as `PENDING/RETRYING -> RUNNING -> SUCCESS/RETRYING/DEAD/CANCELLED`. |
-| Retry strategies | Use fixed interval or exponential backoff retry policies, with handler-level overrides. |
+| Retry strategies | Use fixed interval, exponential backoff with jitter, or registered custom retry policies, with handler-level overrides. |
 | Timeout and lock control | Configure claim lock TTL, recover expired running tasks, and interrupt timed-out handler futures. |
 | Thread pool and handler isolation | Configure task-type-specific pools and enforce `TaskHandler.maxConcurrency()`. |
-| Idempotency SPI | Control duplicate submission and duplicate execution behavior through pluggable strategies. |
+| Idempotency SPI | Control duplicate submission behavior through pluggable strategies; handler side-effect idempotency remains the application responsibility. |
+| Failure classification | Override retry/dead decisions with a `FailureClassifier` bean; the default keeps `NonRetryableException -> DEAD`. |
 | Failure diagnostics | Format error codes, summaries, and compressed stack traces through an exception formatter SPI. |
+| Task event listeners | Observe lightweight state-change events such as submitted, started, succeeded, retry scheduled, dead, cancelled, requeued, and recovered. |
 | Admin APIs | Query tasks, view logs and stats, retry, requeue, cancel, update payloads, and inspect workers. |
 | Spring Boot starter | Enable store, executor, admin APIs, metrics, serializer, idempotency, and worker settings through auto-configuration. |
 
@@ -63,7 +67,7 @@ flowchart LR
     C --> D["reliable-task-store<br/>MyBatis-Plus / MySQL"]
     D --> E["reliable-task-executor<br/>worker scheduling / execution / retry / recovery"]
     E --> F["Business TaskHandler"]
-    E --> G["metrics / alerts / logs"]
+    E --> G["metrics / alerts / logs / events"]
     D --> H["reliable-task-admin<br/>query / retry / cancel / operations"]
     I["reliable-task-spring-boot-starter"] --> B
     I --> D
@@ -79,6 +83,24 @@ Execution flow:
 4. `TaskHandler` executes business logic and writes success, failure, retry, or terminal state changes.
 5. Recovery scans timed-out running tasks and reduces the impact of abnormal worker exits.
 6. Admin APIs provide task queries, manual operations, stats, audit logs, and worker views.
+
+## Reliability Semantics
+
+ReliableTask uses a database-backed Outbox model and provides at-least-once task execution. It does not provide exactly-once execution.
+
+Task submission is written in the same local transaction as business data. If the business transaction commits, the task record commits with it. If the business transaction rolls back, the task record rolls back with it. The handler is executed later by workers; it is not an in-transaction or after-commit callback.
+
+Submission idempotency is based on the effective `bizUniqueKey` value and the unique key in the task table. By default ReliableTask generates `taskType:bizType:bizId`. Applications may also provide `TaskSubmitRequest.idempotencyKey` to use a stable business key directly. A duplicate submission may return the existing task instead of creating a new one.
+
+A `TaskHandler` can still be invoked more than once for the same business action. Common causes include retryable failures, handler timeouts, worker crashes, lease recovery, old workers continuing after an interruption request, and manual requeue operations. Timeout handling calls `Future.cancel(true)`, which requests thread interruption but cannot guarantee that an external HTTP, RPC, MQ, or database side effect has stopped.
+
+Production handlers should therefore be idempotent. Recommended patterns include:
+
+- Use a stable business idempotency key such as order number, payment id, shipment id, or an external request id.
+- Pass that key to external APIs that support idempotency keys.
+- Keep a local side-effect table with a unique constraint before calling non-idempotent external systems.
+- Check whether the side effect has already completed before writing, sending, or charging again.
+- Treat `DEAD`, retry, timeout, and recovery events as operational signals, not proof that no external side effect happened.
 
 ## Modules
 
@@ -191,12 +213,23 @@ reliable-task:
   enabled: true
   worker:
     enabled: true
+    batch-size: 10
+    max-batch-size: 1000
     lock-ttl-seconds: 300
   recovery:
     enabled: true
     timeout-seconds: 300
+    max-reset-per-scan: 100
+  retry:
+    exponential-multiplier: 2.0
+    jitter-ratio: 0.0
+    min-delay-ms: 0
+    max-delay-ms: 300000
   admin:
     enabled: true
+    write-enabled: false
+    max-page-size: 200
+    max-batch-limit: 1000
     audit:
       enabled: false
     batch:
@@ -239,11 +272,72 @@ public class OrderService {
             .taskType("SEND_EMAIL")
             .bizType("ORDER")
             .bizId(orderNo)
+            .idempotencyKey("send-email:order:" + orderNo)
             .payload("{\"to\":\"user@example.com\"}")
             .build());
     }
 }
 ```
+
+If `idempotencyKey` is omitted, ReliableTask keeps the compatible `taskType:bizType:bizId` key. If it is provided, it is trimmed and stored as `bizUniqueKey`; it must be non-blank and no longer than 256 characters. Use stable business identifiers and avoid raw personal data, credentials, tokens, or large payload fragments in the key.
+
+### Custom Retry Strategies
+
+`RetryStrategyType.CUSTOM` is resolved through registered `RetryStrategy` beans. If no custom strategy is registered, `CUSTOM` still fails fast instead of silently falling back.
+
+```java
+@Bean
+RetryStrategy customRetryStrategy() {
+    return new RetryStrategy() {
+        @Override
+        public RetryStrategyType getType() {
+            return RetryStrategyType.CUSTOM;
+        }
+
+        @Override
+        public long nextDelayMs(int retryCount, long intervalMs, long maxDelayMs) {
+            return Math.min(10_000L, maxDelayMs);
+        }
+    };
+}
+```
+
+The built-in `EXPONENTIAL` strategy supports `reliable-task.retry.jitter-ratio`; the default is `0.0`, so existing delay behavior is unchanged unless you enable jitter.
+
+### Custom Failure Classification
+
+By default, `NonRetryableException` goes directly to `DEAD` and other exceptions are eligible for retry until `maxRetryCount` is exhausted. Provide a `FailureClassifier` bean to override that retry/dead decision.
+
+```java
+@Bean
+FailureClassifier failureClassifier() {
+    return (task, error) -> {
+        if (error instanceof RemoteBadRequestException) {
+            return FailureDecision.dead("remote 4xx");
+        }
+        return FailureDecision.retry("temporary failure");
+    };
+}
+```
+
+If a classifier throws, ReliableTask logs a warning and falls back to the default classifier.
+
+### Task Event Listeners
+
+Provide one or more `TaskEventListener` beans to observe lightweight task state changes. Listeners are called synchronously in Spring bean order after the state write succeeds. Listener exceptions are logged and isolated, so one failed listener does not block other listeners or roll back the already-written task state.
+
+```java
+@Bean
+TaskEventListener taskEventListener() {
+    return event -> log.info("task event: type={}, taskId={}, before={}, after={}",
+            event.getEventType(),
+            event.getTaskId(),
+            event.getStatusBefore(),
+            event.getStatusAfter());
+}
+```
+
+ReliableTask publishes events for submit, worker claim/start, success, retry scheduling, dead, manual cancel, manual requeue/retry, and timeout recovery. It does not provide a general event bus, async listener queue, or status history query API.
 
 ## Configuration
 
@@ -255,24 +349,51 @@ ReliableTask properties use the `reliable-task` prefix.
 | `reliable-task.worker.enabled` | `true` | Enables worker polling and execution. |
 | `reliable-task.worker.poll-interval-ms` | `5000` | Worker polling interval. |
 | `reliable-task.worker.batch-size` | `10` | Number of tasks fetched per polling batch. |
+| `reliable-task.worker.max-batch-size` | `1000` | Upper bound applied to worker polling batch size. |
 | `reliable-task.worker.lock-ttl-seconds` | `300` | Initial lock TTL after a worker claims a task. |
 | `reliable-task.recovery.enabled` | `true` | Enables timeout recovery scans. |
-| `reliable-task.recovery.timeout-seconds` | `300` | Grace threshold used by timeout recovery scans. |
+| `reliable-task.recovery.timeout-seconds` | `300` | Compatibility setting retained for existing configs; recovery now uses `lock_expire_at <= now` and does not add a second grace delay. |
+| `reliable-task.recovery.max-reset-per-scan` | `100` | Maximum number of expired RUNNING tasks loaded and reset in one recovery scan. |
+| `reliable-task.retry.exponential-multiplier` | `2.0` | Multiplier used by the built-in `EXPONENTIAL` retry strategy. |
+| `reliable-task.retry.jitter-ratio` | `0.0` | Jitter ratio for `EXPONENTIAL`; `0` disables jitter, valid range is `0..1`. |
+| `reliable-task.retry.min-delay-ms` | `0` | Minimum retry delay applied after strategy calculation. |
+| `reliable-task.retry.max-delay-ms` | `300000` | Default maximum retry delay when `@TaskRetryable.maxDelayMs` is not set. |
 | `reliable-task.metrics.enabled` | `false` | Enables Micrometer metrics recording. |
+| `reliable-task.metrics.include-worker-id-tag` | `false` | Adds `worker_id` to execution metrics only when explicitly enabled; disabled by default to avoid high-cardinality series. |
+| `reliable-task.metrics.stats-cache-ttl-ms` | `5000` | Cache TTL for task stats gauges, so one scrape does not repeatedly query task stats. |
 | `reliable-task.alert.enabled` | `false` | Enables alert scanning. |
-| `reliable-task.admin.enabled` | `true` | Enables admin APIs. |
+| `reliable-task.admin.enabled` | `true` | Registers Admin REST APIs; write operations are controlled separately. |
+| `reliable-task.admin.write-enabled` | `false` | Enables Admin write APIs such as retry, cancel, requeue, payload update, and batch operations. |
+| `reliable-task.admin.max-page-size` | `200` | Upper bound for Admin list page sizes. |
+| `reliable-task.admin.max-batch-limit` | `1000` | Upper bound for Admin batch operation limits. |
 | `reliable-task.admin.auth.enabled` | `false` | Enables admin authorization SPI checks. |
 | `reliable-task.admin.audit.enabled` | `false` | Enables admin operation auditing and audit-log query endpoints. |
 | `reliable-task.admin.batch.enabled` | `false` | Enables limited batch operation APIs. Disabled endpoints return 404. |
 
+Reserved compatibility properties are still bindable but are not wired to behavior in `0.2.0-SNAPSHOT`: `reliable-task.serializer.type` does not switch serializers, so provide a `TaskPayloadSerializer` bean instead; `reliable-task.store.table-prefix` does not change MyBatis table names; `reliable-task.admin.port` and `reliable-task.admin.context-path` do not create a separate management server or change the current `/api/reliable-task` mapping.
+
 See [application-example.yml](reliable-task-demo/src/main/resources/application-example.yml) for a runnable demo configuration.
+
+Micrometer execution counters and timers use low-cardinality `task_type` and `status` tags by default. Queue-health gauges include `reliable_task_backlog_total`, `reliable_task_oldest_pending_age_seconds`, pending/running/dead totals, worker available capacity, and `reliable_task_recovered_total` for timeout recovery events.
+
+## Production Checklist
+
+Before using ReliableTask outside a demo environment:
+
+- Database: use MySQL 8+, apply `schema.sql`, use a dedicated database user, back up task tables, and plan retention or archiving for task, log, audit, worker, and batch-operation tables.
+- Capacity: size `worker.batch-size`, `worker.max-batch-size`, thread pools, queue capacity, and `recovery.max-reset-per-scan` for expected throughput; keep Admin page and batch limits bounded.
+- Handler idempotency: define the business idempotency key for every task type, protect external side effects, set explicit HTTP/RPC timeouts, and separate retryable from non-retryable failures.
+- Lease and recovery: set `worker.lock-ttl-seconds` and handler `timeoutMs()` according to real handler duration; verify recovery behavior with MySQL integration tests before relying on it.
+- Admin security: keep Admin write APIs disabled unless needed; if enabled, protect them with authentication, authorization, audit logging, network controls, and operator accountability.
+- Observability: enable logs, metrics, alerts, and dashboards for pending backlog, oldest pending age, retry rate, dead tasks, recovery resets, and stale workers.
+- Verification: run `mvn -B test` and at least one real MySQL integration profile (`mysql-it` or `mysql-local-it`) before release; document any environment-blocked validation separately.
 
 ## Security
 
 - Do not commit real `application.yml`, `.env`, database credentials, tokens, cookies, internal URLs, or private keys.
 - Keep local configuration in ignored files or environment variables.
 - `application-example.yml` and `.env.example` must contain placeholders only.
-- Admin APIs are suitable for local demos by default. Before production use, add authentication, authorization, audit logging, monitoring, and network access controls.
+- Admin read APIs are enabled by default, while write APIs are disabled by default. Enable `reliable-task.admin.write-enabled=true` only for local demos or protected internal operations, and add authentication, authorization, audit logging, monitoring, and network access controls before production use.
 - Report vulnerabilities through [SECURITY.md](SECURITY.md). Do not disclose exploitable details in public issues.
 
 ## Testing
@@ -281,7 +402,25 @@ See [application-example.yml](reliable-task-demo/src/main/resources/application-
 mvn -B test
 ```
 
-The default test suite should not require a local MySQL instance. Real MySQL is only needed for the runnable demo flow.
+The default test suite should not require Docker or a local MySQL instance.
+CI runs this default suite on pull requests and pushes. The Testcontainers MySQL profile is available as a manual GitHub Actions run so the lightweight PR gate does not depend on Docker image pulls.
+
+Real MySQL integration tests are opt-in through the `mysql-it` Maven profile and use Testcontainers:
+
+```bash
+mvn -B -Pmysql-it -pl reliable-task-store,reliable-task-executor -am test
+```
+
+If Docker is unavailable, the same `*IT` tests can run against a dedicated local MySQL 8 database:
+
+```cmd
+set RELIABLE_TASK_IT_JDBC_URL=jdbc:mysql://localhost:3306/reliable_task_it?useUnicode=true^&characterEncoding=utf-8^&serverTimezone=Asia/Shanghai
+set RELIABLE_TASK_IT_USERNAME=reliable_task_it
+set RELIABLE_TASK_IT_PASSWORD=change_me
+mvn -B -Pmysql-local-it -pl reliable-task-store,reliable-task-executor -am test
+```
+
+Use a disposable integration-test database only. The local profile initializes the ReliableTask schema and writes test rows. If neither Docker/Testcontainers nor local MySQL is available, record the environment evidence and run the default `mvn -B test` suite separately. Do not treat skipped or blocked MySQL integration tests as verified.
 
 ## FAQ
 
@@ -290,6 +429,10 @@ The default test suite should not require a local MySQL instance. Real MySQL is 
 No. ReliableTask is not Kafka, RabbitMQ, RocketMQ, or a general-purpose MQ replacement.
 It focuses on database-backed reliable business task execution where task submission should be committed with business data.
 
+### Does ReliableTask provide exactly-once execution?
+
+No. ReliableTask provides at-least-once execution. It reduces duplicate state writes with task status and lease checks, but business handlers and external systems must tolerate duplicate calls.
+
 ### Why is `application.yml` ignored?
 
 `application.yml` often contains local credentials, internal addresses, and environment-specific values.
@@ -297,8 +440,8 @@ The repository keeps only `.env.example` and `application-example.yml` with plac
 
 ### Can Admin APIs be exposed directly in production?
 
-No. Do not expose admin write APIs directly to the public internet.
-Production deployments must add authentication, authorization, audit logging, network access control, and monitoring.
+No. Admin write APIs are disabled by default and must not be exposed directly to the public internet.
+Production deployments that enable `reliable-task.admin.write-enabled=true` must add authentication, authorization, audit logging, network access control, and monitoring.
 
 ### Is the current preview available on Maven Central?
 

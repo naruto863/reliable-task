@@ -9,7 +9,7 @@
 -- 1. 任务主表 reliable_task
 -- ----------------------------
 -- 职责: 存储异步任务实例的完整信息，包括任务参数、状态、重试配置、执行结果等
--- 并发安全: 通过 uk_biz_unique_key 唯一索引保证投递幂等，通过 FOR UPDATE SKIP LOCKED 保证消费不重复
+-- 并发安全: 通过 uk_biz_unique_key 唯一索引保证投递幂等；Worker 抢占通过条件 UPDATE 校验状态、租约和版本，当前 schema 不依赖 FOR UPDATE SKIP LOCKED
 CREATE TABLE IF NOT EXISTS `reliable_task`
 (
     `id`                BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键ID',

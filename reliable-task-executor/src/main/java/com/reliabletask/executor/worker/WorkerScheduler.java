@@ -1,10 +1,13 @@
 package com.reliabletask.executor.worker;
 
+import com.reliabletask.core.enums.TaskEventType;
+import com.reliabletask.core.enums.TaskStatus;
+import com.reliabletask.core.event.TaskEventPublisher;
+import com.reliabletask.core.model.TaskEvent;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.WorkerHeartbeat;
 import com.reliabletask.core.spi.TaskStore;
 import com.reliabletask.executor.handler.TaskExecutor;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 
@@ -31,12 +34,24 @@ import java.util.List;
  * </ul>
  */
 @Slf4j
-@RequiredArgsConstructor
 public class WorkerScheduler {
 
     private final TaskStore taskStore;
     private final WorkerProperties properties;
     private final TaskExecutor taskExecutor;
+    private final TaskEventPublisher eventPublisher;
+
+    public WorkerScheduler(TaskStore taskStore, WorkerProperties properties, TaskExecutor taskExecutor) {
+        this(taskStore, properties, taskExecutor, new TaskEventPublisher());
+    }
+
+    public WorkerScheduler(TaskStore taskStore, WorkerProperties properties,
+                           TaskExecutor taskExecutor, TaskEventPublisher eventPublisher) {
+        this.taskStore = taskStore;
+        this.properties = properties;
+        this.taskExecutor = taskExecutor;
+        this.eventPublisher = eventPublisher != null ? eventPublisher : new TaskEventPublisher();
+    }
 
     /**
      * 定时拉取并执行任务
@@ -76,7 +91,13 @@ public class WorkerScheduler {
                             workerId, task.getId(), task.getTaskType(), task.getBizId());
 
                     TaskInstance claimedTask = taskStore.getById(task.getId());
-                    taskExecutor.execute(claimedTask != null ? claimedTask : task);
+                    if (claimedTask == null) {
+                        log.warn("Worker {} claimed task but failed to load latest lease: id={}",
+                                workerId, task.getId());
+                        continue;
+                    }
+                    publishStarted(task, claimedTask);
+                    taskExecutor.execute(claimedTask);
                 }
             } catch (Exception e) {
                 log.error("Failed to claim task: id={}, type={}, bizId={}",
@@ -111,7 +132,8 @@ public class WorkerScheduler {
     }
 
     private int resolveFetchSize() {
-        int batchSize = Math.max(properties.getBatchSize(), 0);
+        int maxBatchSize = properties.getMaxBatchSize() > 0 ? properties.getMaxBatchSize() : 1000;
+        int batchSize = Math.min(Math.max(properties.getBatchSize(), 0), maxBatchSize);
         if (!properties.isBackpressureEnabled()) {
             return batchSize;
         }
@@ -140,5 +162,11 @@ public class WorkerScheduler {
                     batchSize, fetchSize, availableCapacity);
         }
         return fetchSize;
+    }
+
+    private void publishStarted(TaskInstance fetchedTask, TaskInstance claimedTask) {
+        TaskStatus statusBefore = fetchedTask == null ? null : fetchedTask.getStatus();
+        eventPublisher.publish(TaskEvent.of(TaskEventType.STARTED, claimedTask,
+                statusBefore, TaskStatus.RUNNING, "task claimed"));
     }
 }
