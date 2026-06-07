@@ -523,9 +523,6 @@ public class TaskAdminController {
             return null;
         }
         if (authorizationProvider == null) {
-            if (!writeOperation) {
-                return null;
-            }
             recordAdminAudit("AUTH_DENIED", operator, taskId, "action=" + action,
                     "FAILED", "authorization provider is not configured", traceId);
             return Result.error(403, "Forbidden: " + action);
