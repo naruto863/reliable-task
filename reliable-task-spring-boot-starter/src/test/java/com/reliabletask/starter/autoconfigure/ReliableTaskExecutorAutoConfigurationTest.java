@@ -311,7 +311,7 @@ class ReliableTaskExecutorAutoConfigurationTest {
             assertThat(properties.getWorker().getHeartbeat().getStaleWorkerThresholdSeconds()).isEqualTo(60L);
             assertThat(properties.getAdmin().isWriteEnabled()).isFalse();
             assertThat(properties.getAdmin().getAudit().isEnabled()).isFalse();
-            assertThat(properties.getAdmin().getAuth().isEnabled()).isFalse();
+            assertThat(properties.getAdmin().getAuth().isEnabled()).isTrue();
             assertThat(properties.getAdmin().getBatch().isEnabled()).isFalse();
         });
     }

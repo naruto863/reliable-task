@@ -28,25 +28,32 @@ class ReliableTaskAdminAutoConfigurationTest {
             .withUserConfiguration(TaskStoreTestConfiguration.class);
 
     @Test
-    @DisplayName("admin 默认启用时注册 TaskAdminController")
+    @DisplayName("admin 启用且关闭鉴权时注册 TaskAdminController 和默认 provider")
     void adminEnabledByDefault_registersController() {
-        contextRunner.run(context -> {
-            assertThat(context).hasSingleBean(TaskAdminController.class);
-            assertThat(context).hasSingleBean(TaskAuthorizationProvider.class);
-            assertThat(context).getBean(TaskAuthorizationProvider.class)
-                    .isInstanceOf(NoopTaskAuthorizationProvider.class);
-            TaskAdminController controller = context.getBean(TaskAdminController.class);
-            TaskStore taskStore = context.getBean(TaskStore.class);
-            assertThat(controller.cancel(1L, "admin", "trace-1").getCode()).isEqualTo(404);
-            verify(taskStore, never()).cancelTask(anyLong());
-        });
+        contextRunner
+                .withPropertyValues(
+                        "reliable-task.admin.enabled=true",
+                        "reliable-task.admin.auth.enabled=false")
+                .run(context -> {
+                    assertThat(context).hasSingleBean(TaskAdminController.class);
+                    assertThat(context).hasSingleBean(TaskAuthorizationProvider.class);
+                    assertThat(context).getBean(TaskAuthorizationProvider.class)
+                            .isInstanceOf(NoopTaskAuthorizationProvider.class);
+                    TaskAdminController controller = context.getBean(TaskAdminController.class);
+                    TaskStore taskStore = context.getBean(TaskStore.class);
+                    assertThat(controller.cancel(1L, "admin", "trace-1").getCode()).isEqualTo(404);
+                    verify(taskStore, never()).cancelTask(anyLong());
+                });
     }
 
     @Test
     @DisplayName("admin write-enabled=true 时允许写接口进入 store")
     void adminWriteEnabled_allowsWriteOperations() {
         contextRunner
-                .withPropertyValues("reliable-task.admin.write-enabled=true")
+                .withPropertyValues(
+                        "reliable-task.admin.enabled=true",
+                        "reliable-task.admin.write-enabled=true",
+                        "reliable-task.admin.auth.enabled=false")
                 .run(context -> {
                     TaskAdminController controller = context.getBean(TaskAdminController.class);
                     TaskStore taskStore = context.getBean(TaskStore.class);
@@ -70,7 +77,9 @@ class ReliableTaskAdminAutoConfigurationTest {
     @DisplayName("auth 开启且没有自定义 provider 时不注册默认 provider")
     void authEnabledWithoutProvider_doesNotRegisterNoopProvider() {
         contextRunner
-                .withPropertyValues("reliable-task.admin.auth.enabled=true")
+                .withPropertyValues(
+                        "reliable-task.admin.enabled=true",
+                        "reliable-task.admin.auth.enabled=true")
                 .run(context -> {
                     assertThat(context).hasSingleBean(TaskAdminController.class);
                     assertThat(context).doesNotHaveBean(TaskAuthorizationProvider.class);
