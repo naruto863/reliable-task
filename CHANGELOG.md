@@ -6,6 +6,8 @@ This project follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-12
+
 ### Added
 
 - Add the v0.3.x MVP scope and verification matrix in `docs/review/RELIABLE_TASK_V03_SCOPE.md`.
@@ -27,7 +29,7 @@ This project follows Semantic Versioning.
 
 ### Changed
 
-- Change project development version to `0.2.0-SNAPSHOT`.
+- Change project release version to `0.3.0`.
 - Use `reliable-task.recovery.timeout-seconds` when building the timeout recovery threshold.
 - Enforce `TaskHandler.maxConcurrency()` with handler-level semaphores.
 - Cancel timed-out execution futures with interruption before scheduling retry/dead handling.
@@ -58,5 +60,6 @@ This project follows Semantic Versioning.
 - Document that Admin APIs require authentication, authorization, audit logging, and network access controls before production use.
 - Keep real local configuration out of version control and use placeholder values in example configuration.
 
-[Unreleased]: https://github.com/naruto863/reliable-task/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/naruto863/reliable-task/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/naruto863/reliable-task/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/naruto863/reliable-task/releases/tag/v0.1.0

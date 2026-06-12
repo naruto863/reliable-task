@@ -6,8 +6,8 @@
 
 - 版本号遵循 SemVer：`MAJOR.MINOR.PATCH`。
 - `0.x` 阶段为预览期，API 仍可能调整；破坏性变化必须写入 `CHANGELOG.md`。
-- Maven 开发版本使用 `-SNAPSHOT`，例如 `0.2.0-SNAPSHOT`。
-- Git Tag 使用 `vX.Y.Z`，例如 `v0.1.0`。
+- Maven 开发版本使用 `-SNAPSHOT`，例如 `0.4.0-SNAPSHOT`。
+- Git Tag 使用 `vX.Y.Z`，例如 `v0.3.0`。
 
 ## 发布分支
 
@@ -80,7 +80,7 @@ gh release create v0.1.0 \
 如果发布后继续开发下一个版本：
 
 ```bash
-mvn versions:set -DnewVersion=0.2.0-SNAPSHOT
+mvn versions:set -DnewVersion=0.4.0-SNAPSHOT
 git add pom.xml reliable-task-*/pom.xml
 git commit -m "chore: start next development iteration"
 git push origin main

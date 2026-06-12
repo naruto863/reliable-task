@@ -109,7 +109,7 @@ git push origin v0.1.0
 发布后回到下一个开发版本：
 
 ```bash
-mvn versions:set -DnewVersion=0.2.0-SNAPSHOT
+mvn versions:set -DnewVersion=0.4.0-SNAPSHOT
 ```
 
 ## 文档和示例配置
