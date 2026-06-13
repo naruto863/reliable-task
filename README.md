@@ -17,6 +17,7 @@ recovers timed-out executions, and exposes admin APIs for operational visibility
 ## Table of Contents
 
 - [Why ReliableTask](#why-reliabletask)
+- [Use Cases and Non-Goals](#use-cases-and-non-goals)
 - [Features](#features)
 - [Architecture](#architecture)
 - [Reliability Semantics](#reliability-semantics)
@@ -40,6 +41,34 @@ such as sending notifications, issuing coupons, synchronizing data, or triggerin
 
 It is not a general-purpose message queue. The current preview focuses on a database-backed execution model:
 write the business record and the task record in one transaction, then let workers claim, execute, retry, and recover tasks.
+
+## Use Cases and Non-Goals
+
+Business applications often start with small asynchronous follow-up actions, then run into reliability problems:
+
+- An order, payment, or shipment transaction commits, but the follow-up coupon, notification, or external sync must not disappear.
+- `@Async` or a local thread pool is easy to add, but a process restart, rejected task, or uncaught exception can leave no durable task state to inspect or retry.
+- Calling external HTTP, RPC, or MQ systems inside the business transaction extends lock time and lets external instability slow down the core path.
+- After-commit callbacks avoid blocking the transaction, but retry policy, timeout recovery, dead-letter handling, and manual operations still need to be built.
+- A full message broker may be too much for a small set of internal reliable tasks once transaction handoff, consumer idempotency, dead-letter operations, and tracing are included.
+- Scheduled scans over business tables can work, but retry count, next execution time, failure diagnostics, concurrent claiming, and audit history tend to spread across the codebase.
+
+ReliableTask fits best when:
+
+- A Spring Boot application already uses MySQL and can use a database-backed Outbox model for reliable post-transaction work.
+- Task records must commit or roll back with business data, such as issuing coupons after order creation, notifying after payment success, or syncing a shipment to an external system.
+- The workload is moderate and values traceability, retry, recovery, and manual operations more than maximum throughput or millisecond latency.
+- Business handlers can be made idempotent with stable business keys and can accept at-least-once execution.
+- The team wants to solve internal reliable tasks with task tables, logs, and admin APIs before introducing another standalone messaging component.
+
+ReliableTask is not a good fit when:
+
+- You need general-purpose broker features such as cross-system pub/sub, stream processing, broadcast fan-out, or very high-throughput buffering.
+- You need exactly-once external side effects. ReliableTask schedules at least once; external APIs, charging, shipping, and messages still require business idempotency.
+- You need complex workflow orchestration, human approval flows, long-running Saga state machines, or a visual process engine. Systems such as Temporal, Flowable, or Camunda are better suited to that class of work.
+- The main need is cron scheduling, offline batch processing, reporting jobs, or pure delayed execution rather than reliable follow-up work created by business transactions.
+- The application cannot use MySQL or cannot add task, log, worker, and audit tables.
+- Failed tasks have no clear business compensation path, or the application cannot provide stable idempotency keys. In that case, define the business semantics before adding the framework.
 
 ## Features
 
