@@ -1,6 +1,7 @@
 package com.reliabletask.executor.retry;
 
 import com.reliabletask.core.annotation.TaskRetryable;
+import com.reliabletask.core.deadletter.TaskDeadLetterDispatcher;
 import com.reliabletask.core.diagnostics.TaskExceptionFormatter;
 import com.reliabletask.core.diagnostics.TaskFailureDiagnostic;
 import com.reliabletask.core.enums.TaskEventType;
@@ -185,6 +186,30 @@ class RetryEngineTest {
     }
 
     @Test
+    @DisplayName("handleFailure - DEAD 回写成功后调用死信分发器")
+    void handleFailure_deadWriteSuccess_dispatchesDeadLetter() {
+        TaskDeadLetterDispatcher deadLetterDispatcher = mock(TaskDeadLetterDispatcher.class);
+        retryEngine = new RetryEngine(taskStore, metricsRecorder, auditRecorder, mock(TaskAlertService.class),
+                null, new RetryStrategyRegistry(), new RetryProperties(), null,
+                new TaskEventPublisher(), deadLetterDispatcher);
+        TaskInstance task = TaskInstance.builder()
+                .id(33L).taskType("TYPE_A").bizId("BIZ-33")
+                .executeCount(1).maxRetryCount(3)
+                .build();
+
+        retryEngine.handleFailure(new DefaultHandler(), task,
+                new NonRetryableException("invalid data"), 200L, "RUNNING");
+
+        verify(deadLetterDispatcher).dispatch(argThat(context ->
+                context.getTask() == task
+                        && "NonRetryableException".equals(context.getErrorCode())
+                        && context.getErrorMessage().contains("invalid data")
+                        && !context.isRetriesExhausted()
+                        && "RetryEngine".equals(context.getSource())
+                        && context.getDeadAt() != null));
+    }
+
+    @Test
     @DisplayName("handleFailure - DEAD 回写优先使用执行租约")
     void handleFailure_nonRetryableExceptionUsesExecutionLease() {
         TaskAlertService alertService = mock(TaskAlertService.class);
@@ -204,6 +229,27 @@ class RetryEngineTest {
         verify(taskStore, never()).markDead(eq(13L), anyString(), anyString());
         verify(taskStore).saveLog(eq(13L), eq(1), eq("RUNNING"), eq("DEAD"),
                 eq(false), eq(200L), eq("NonRetryableException"), anyString(), eq("worker-13"), eq("trace-13"));
+    }
+
+    @Test
+    @DisplayName("handleFailure - DEAD CAS 失败不调用死信分发器")
+    void handleFailure_deadLeaseCasFailureSkipsDeadLetterDispatch() {
+        TaskDeadLetterDispatcher deadLetterDispatcher = mock(TaskDeadLetterDispatcher.class);
+        retryEngine = new RetryEngine(taskStore, metricsRecorder, auditRecorder, mock(TaskAlertService.class),
+                null, new RetryStrategyRegistry(), new RetryProperties(), null,
+                new TaskEventPublisher(), deadLetterDispatcher);
+        TaskInstance task = leasedTask(34L, 1, 3);
+        when(taskStore.markDead(any(TaskExecutionLease.class), anyString(), anyString()))
+                .thenReturn(false);
+
+        retryEngine.handleFailure(new DefaultHandler(), task,
+                new NonRetryableException("invalid data"), 200L, "RUNNING");
+
+        verify(taskStore).markDead(any(TaskExecutionLease.class), eq("NonRetryableException"), anyString());
+        verify(taskStore, never()).markDead(eq(34L), anyString(), anyString());
+        verify(taskStore, never()).saveLog(anyLong(), anyInt(), anyString(), anyString(),
+                anyBoolean(), anyLong(), anyString(), anyString(), any(), any());
+        verify(deadLetterDispatcher, never()).dispatch(any());
     }
 
     @Test

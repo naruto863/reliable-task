@@ -4,6 +4,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.reliabletask.core.dto.PageResult;
+import com.reliabletask.core.dto.FailureTopQueryRequest;
+import com.reliabletask.core.dto.SlowTaskQueryRequest;
+import com.reliabletask.core.dto.TaskFailureQueryRequest;
 import com.reliabletask.core.dto.TaskQueryRequest;
 import com.reliabletask.core.enums.TaskStatus;
 import com.reliabletask.core.lifecycle.TaskStateMachine;
@@ -14,8 +17,12 @@ import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.WorkerHeartbeat;
 import com.reliabletask.core.spi.TaskStore;
 import com.reliabletask.core.vo.TaskDetailVO;
+import com.reliabletask.core.vo.FailureTopVO;
+import com.reliabletask.core.vo.SlowTaskVO;
+import com.reliabletask.core.vo.TaskFailureVO;
 import com.reliabletask.core.vo.TaskLogVO;
 import com.reliabletask.core.vo.TaskStatsVO;
+import com.reliabletask.core.vo.TaskTimelineItemVO;
 import com.reliabletask.core.vo.TaskVO;
 import com.reliabletask.store.converter.ReliableTaskConverter;
 import com.reliabletask.store.entity.ReliableTaskAuditLogEntity;
@@ -35,6 +42,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +69,12 @@ public class MyBatisTaskStore implements TaskStore {
     private static final long DEFAULT_LOCK_TTL_MINUTES = 5;
     private static final int MAX_BATCH_QUERY_LIMIT = 1000;
     private static final int MAX_PAGE_SIZE = TaskQueryRequest.DEFAULT_MAX_PAGE_SIZE;
+    private static final int DEFAULT_OPERATION_QUERY_LIMIT = 50;
+    private static final int MAX_OPERATION_QUERY_LIMIT = 200;
+    private static final int DEFAULT_FAILURE_TOP_LIMIT = 20;
+    private static final int MAX_FAILURE_TOP_LIMIT = 100;
+    private static final long DEFAULT_SLOW_THRESHOLD_MS = 30_000L;
+    private static final int ERROR_SUMMARY_MAX_LENGTH = 1000;
 
     private final ReliableTaskMapper taskMapper;
     private final ReliableTaskLogMapper taskLogMapper;
@@ -558,6 +573,87 @@ public class MyBatisTaskStore implements TaskStore {
     }
 
     @Override
+    public List<TaskTimelineItemVO> getTaskTimeline(Long taskId) {
+        TaskDetailVO detail = getTaskDetail(taskId);
+        if (detail == null) {
+            return List.of();
+        }
+
+        List<TaskTimelineItemVO> timeline = new ArrayList<>();
+        timeline.add(toSubmittedTimelineItem(detail));
+        getTaskLogs(taskId).forEach(log -> timeline.add(toLogTimelineItem(log)));
+        getAuditLogsByTaskId(taskId).forEach(audit -> timeline.add(toAuditTimelineItem(audit)));
+        timeline.add(toCurrentTimelineItem(detail));
+
+        timeline.sort(Comparator
+                .comparing(TaskTimelineItemVO::getEventTime, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparingInt(item -> timelineSourceOrder(item.getSource()))
+                .thenComparing(item -> item.getSourceId() == null ? Long.MAX_VALUE : item.getSourceId()));
+        return timeline;
+    }
+
+    @Override
+    public List<TaskFailureVO> listRecentFailures(TaskFailureQueryRequest request) {
+        TaskFailureQueryRequest effectiveRequest = request != null ? request : new TaskFailureQueryRequest();
+        List<TaskFailureVO> rows = taskLogMapper.selectRecentFailures(
+                blankToNull(effectiveRequest.getTaskType()),
+                blankToNull(effectiveRequest.getErrorCode()),
+                effectiveRequest.getCreateTimeStart(),
+                effectiveRequest.getCreateTimeEnd(),
+                normalizeOperationQueryLimit(effectiveRequest.getLimit()),
+                TaskStatus.FAILED.getCode());
+        if (rows == null) {
+            return List.of();
+        }
+        rows.forEach(row -> row.setErrorMsg(summarizeError(row.getErrorMsg())));
+        return rows;
+    }
+
+    @Override
+    public List<SlowTaskVO> listSlowTasks(SlowTaskQueryRequest request) {
+        SlowTaskQueryRequest effectiveRequest = request != null ? request : new SlowTaskQueryRequest();
+        List<SlowTaskVO> rows = taskLogMapper.selectSlowTasks(
+                blankToNull(effectiveRequest.getTaskType()),
+                normalizeSlowThreshold(effectiveRequest.getDurationMsGte()),
+                effectiveRequest.getCreateTimeStart(),
+                effectiveRequest.getCreateTimeEnd(),
+                normalizeOperationQueryLimit(effectiveRequest.getLimit()));
+        if (rows == null) {
+            return List.of();
+        }
+        rows.forEach(row -> row.setErrorMsg(summarizeError(row.getErrorMsg())));
+        return rows;
+    }
+
+    @Override
+    public List<FailureTopVO> listFailureTop(FailureTopQueryRequest request) {
+        FailureTopQueryRequest effectiveRequest = request != null ? request : new FailureTopQueryRequest();
+        String groupBy = normalizeFailureTopGroupBy(effectiveRequest.getGroupBy());
+        String taskType = blankToNull(effectiveRequest.getTaskType());
+        LocalDateTime createTimeStart = effectiveRequest.getCreateTimeStart();
+        LocalDateTime createTimeEnd = effectiveRequest.getCreateTimeEnd();
+        int limit = normalizeFailureTopLimit(effectiveRequest.getLimit());
+
+        List<FailureTopVO> rows = switch (groupBy) {
+            case "taskType" -> taskMapper.selectFailureTopByTaskType(
+                    taskType, createTimeStart, createTimeEnd, limit, TaskStatus.FAILED.getCode());
+            case "errorCode" -> taskMapper.selectFailureTopByErrorCode(
+                    taskType, createTimeStart, createTimeEnd, limit, TaskStatus.FAILED.getCode());
+            case "taskType,errorCode" -> taskMapper.selectFailureTopByTaskTypeAndErrorCode(
+                    taskType, createTimeStart, createTimeEnd, limit, TaskStatus.FAILED.getCode());
+            default -> throw new IllegalArgumentException("Unsupported groupBy: " + groupBy);
+        };
+        if (rows == null) {
+            return List.of();
+        }
+        rows.forEach(row -> {
+            row.setCreateTimeStart(createTimeStart);
+            row.setCreateTimeEnd(createTimeEnd);
+        });
+        return rows;
+    }
+
+    @Override
     public TaskStatsVO getStats() {
         TaskStatsVO stats = new TaskStatsVO();
 
@@ -855,6 +951,148 @@ public class MyBatisTaskStore implements TaskStore {
             return TaskQueryRequest.DEFAULT_PAGE_SIZE;
         }
         return Math.min(pageSize, MAX_PAGE_SIZE);
+    }
+
+    private int normalizeOperationQueryLimit(Integer limit) {
+        if (limit == null || limit <= 0) {
+            return DEFAULT_OPERATION_QUERY_LIMIT;
+        }
+        return Math.min(limit, MAX_OPERATION_QUERY_LIMIT);
+    }
+
+    private long normalizeSlowThreshold(Long durationMsGte) {
+        if (durationMsGte == null || durationMsGte <= 0) {
+            return DEFAULT_SLOW_THRESHOLD_MS;
+        }
+        return durationMsGte;
+    }
+
+    private int normalizeFailureTopLimit(Integer limit) {
+        if (limit == null || limit <= 0) {
+            return DEFAULT_FAILURE_TOP_LIMIT;
+        }
+        return Math.min(limit, MAX_FAILURE_TOP_LIMIT);
+    }
+
+    private String normalizeFailureTopGroupBy(String groupBy) {
+        if (groupBy == null || groupBy.isBlank()) {
+            return "taskType,errorCode";
+        }
+        String normalized = groupBy.replace(" ", "");
+        if ("taskType".equals(normalized)
+                || "errorCode".equals(normalized)
+                || "taskType,errorCode".equals(normalized)) {
+            return normalized;
+        }
+        throw new IllegalArgumentException("groupBy must be one of: taskType, errorCode, taskType,errorCode");
+    }
+
+    private TaskTimelineItemVO toSubmittedTimelineItem(TaskDetailVO detail) {
+        TaskTimelineItemVO item = new TaskTimelineItemVO();
+        item.setSource("SUBMITTED");
+        item.setEventType("TASK_SUBMITTED");
+        item.setSourceId(detail.getId());
+        item.setTaskId(detail.getId());
+        item.setEventTime(detail.getCreateTime());
+        item.setStatusAfter(TaskStatus.PENDING.name());
+        item.setStatusCode(TaskStatus.PENDING.getCode());
+        item.setStatusDesc(TaskStatus.PENDING.getDescription());
+        item.setTraceId(detail.getTraceId());
+        return item;
+    }
+
+    private TaskTimelineItemVO toLogTimelineItem(TaskLogVO log) {
+        TaskTimelineItemVO item = new TaskTimelineItemVO();
+        item.setSource("LOG");
+        item.setEventType("TASK_EXECUTION");
+        item.setSourceId(log.getId());
+        item.setTaskId(log.getTaskId());
+        item.setEventTime(log.getExecuteTime() != null ? log.getExecuteTime() : log.getCreateTime());
+        item.setStatusBefore(log.getStatusBefore());
+        item.setStatusAfter(log.getStatusAfter());
+        item.setStatusCode(log.getStatus());
+        item.setStatusDesc(log.getStatusDesc());
+        item.setAttemptNo(log.getAttemptNo());
+        item.setDurationMs(log.getDurationMs());
+        item.setErrorCode(log.getErrorCode());
+        item.setErrorMsg(summarizeError(log.getErrorMsg()));
+        item.setWorkerId(log.getWorkerId());
+        item.setTraceId(log.getTraceId());
+        return item;
+    }
+
+    private TaskTimelineItemVO toAuditTimelineItem(AuditLog audit) {
+        TaskTimelineItemVO item = new TaskTimelineItemVO();
+        item.setSource("AUDIT");
+        item.setEventType("ADMIN_OPERATION");
+        item.setSourceId(audit.getId());
+        item.setTaskId(audit.getTaskId());
+        item.setEventTime(audit.getCreateTime());
+        item.setOperator(audit.getOperator());
+        item.setOperationType(audit.getOperationType());
+        item.setRequestSummary(audit.getRequestSummary());
+        item.setResult(audit.getResult());
+        item.setErrorMsg(summarizeError(audit.getErrorMsg()));
+        item.setTraceId(audit.getTraceId());
+        return item;
+    }
+
+    private TaskTimelineItemVO toCurrentTimelineItem(TaskDetailVO detail) {
+        TaskTimelineItemVO item = new TaskTimelineItemVO();
+        item.setSource("CURRENT");
+        item.setEventType("CURRENT_STATE");
+        item.setSourceId(detail.getId());
+        item.setTaskId(detail.getId());
+        item.setEventTime(currentTimelineTime(detail));
+        item.setStatusAfter(statusName(detail.getStatusCode()));
+        item.setStatusCode(detail.getStatusCode());
+        item.setStatusDesc(detail.getStatusDesc());
+        item.setErrorMsg(summarizeError(detail.getErrorMsg()));
+        item.setWorkerId(detail.getWorkerId());
+        item.setTraceId(detail.getTraceId());
+        return item;
+    }
+
+    private LocalDateTime currentTimelineTime(TaskDetailVO detail) {
+        if (detail.getFinishTime() != null) {
+            return detail.getFinishTime();
+        }
+        if (detail.getUpdateTime() != null) {
+            return detail.getUpdateTime();
+        }
+        return detail.getCreateTime();
+    }
+
+    private String statusName(Integer statusCode) {
+        if (statusCode == null) {
+            return null;
+        }
+        try {
+            return TaskStatus.fromCode(statusCode).name();
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private int timelineSourceOrder(String source) {
+        return switch (source) {
+            case "SUBMITTED" -> 0;
+            case "LOG" -> 1;
+            case "AUDIT" -> 2;
+            case "CURRENT" -> 3;
+            default -> 99;
+        };
+    }
+
+    private String blankToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value;
+    }
+
+    private String summarizeError(String errorMsg) {
+        return truncate(errorMsg, ERROR_SUMMARY_MAX_LENGTH);
     }
 
     private Map<Integer, Long> parseStatusCount(List<Map<String, Object>> statusRows) {

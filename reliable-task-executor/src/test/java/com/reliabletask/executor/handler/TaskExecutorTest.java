@@ -4,6 +4,7 @@ import com.reliabletask.core.enums.RetryStrategyType;
 import com.reliabletask.core.enums.TaskEventType;
 import com.reliabletask.core.enums.TaskStatus;
 import com.reliabletask.core.context.TraceContext;
+import com.reliabletask.core.deadletter.TaskDeadLetterDispatcher;
 import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.exception.NonRetryableException;
 import com.reliabletask.core.exception.RetryableException;
@@ -305,6 +306,10 @@ class TaskExecutorTest {
     @Test
     @DisplayName("execute - 无 Handler 标记 DEAD")
     void execute_noHandler_marksDead() {
+        TaskDeadLetterDispatcher deadLetterDispatcher = mock(TaskDeadLetterDispatcher.class);
+        executor = new TaskExecutor(taskStore, registry, executorFactory, retryEngine,
+                new TaskExecutionInterceptor(), new com.reliabletask.executor.serializer.JacksonTaskPayloadSerializer(),
+                new WorkerProperties(), null, null, null, null, deadLetterDispatcher);
         TaskInstance task = TaskInstance.builder()
                 .id(5L).taskType("UNKNOWN").bizId("BIZ-5")
                 .status(TaskStatus.RUNNING).executeCount(0)
@@ -316,7 +321,41 @@ class TaskExecutorTest {
         verify(taskStore).markDead(eq(5L), eq("NO_HANDLER"), anyString());
         verify(taskStore).saveLog(eq(5L), eq(0), eq("RUNNING"), eq("DEAD"),
                 eq(false), anyLong(), eq("NO_HANDLER"), anyString(), eq("worker-5"), eq("trace-5"));
+        verify(deadLetterDispatcher).dispatch(argThat(context ->
+                context.getTask() == task
+                        && "NO_HANDLER".equals(context.getErrorCode())
+                        && context.getReason().contains("no handler found")
+                        && !context.isRetriesExhausted()
+                        && "TaskExecutor".equals(context.getSource())
+                        && context.getDeadAt() != null));
         assertNull(TraceContext.getTraceId());
+    }
+
+    @Test
+    @DisplayName("execute - 无 Handler DEAD CAS 失败不调用死信分发器")
+    void execute_noHandlerLeaseCasFailureSkipsDeadLetterDispatch() {
+        TaskDeadLetterDispatcher deadLetterDispatcher = mock(TaskDeadLetterDispatcher.class);
+        executor = new TaskExecutor(taskStore, registry, executorFactory, retryEngine,
+                new TaskExecutionInterceptor(), new com.reliabletask.executor.serializer.JacksonTaskPayloadSerializer(),
+                new WorkerProperties(), null, null, null, null, deadLetterDispatcher);
+        TaskInstance task = TaskInstance.builder()
+                .id(55L).taskType("UNKNOWN").bizId("BIZ-55")
+                .status(TaskStatus.RUNNING).executeCount(0)
+                .workerId("worker-55")
+                .lockedAt(java.time.LocalDateTime.now().minusSeconds(10))
+                .lockExpireAt(java.time.LocalDateTime.now().plusMinutes(5))
+                .version(2)
+                .build();
+        when(taskStore.markDead(any(TaskExecutionLease.class), eq("NO_HANDLER"), anyString()))
+                .thenReturn(false);
+
+        executor.execute(task);
+
+        verify(taskStore).markDead(any(TaskExecutionLease.class), eq("NO_HANDLER"), anyString());
+        verify(taskStore, never()).markDead(eq(55L), anyString(), anyString());
+        verify(taskStore, never()).saveLog(anyLong(), anyInt(), anyString(), anyString(),
+                anyBoolean(), anyLong(), anyString(), anyString(), any(), any());
+        verify(deadLetterDispatcher, never()).dispatch(any());
     }
 
     @Test

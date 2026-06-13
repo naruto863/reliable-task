@@ -1,6 +1,7 @@
 package com.reliabletask.executor.retry;
 
 import com.reliabletask.core.classifier.DefaultFailureClassifier;
+import com.reliabletask.core.deadletter.TaskDeadLetterDispatcher;
 import com.reliabletask.core.exception.NonRetryableException;
 import com.reliabletask.core.diagnostics.DefaultTaskExceptionFormatter;
 import com.reliabletask.core.diagnostics.TaskExceptionFormatter;
@@ -9,6 +10,7 @@ import com.reliabletask.core.enums.TaskEventType;
 import com.reliabletask.core.enums.TaskStatus;
 import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.model.AuditLog;
+import com.reliabletask.core.model.DeadLetterContext;
 import com.reliabletask.core.model.FailureDecision;
 import com.reliabletask.core.model.TaskEvent;
 import com.reliabletask.core.model.TaskExecutionLease;
@@ -66,6 +68,7 @@ public class RetryEngine {
     private final RetryProperties retryProperties;
     private final FailureClassifier failureClassifier;
     private final TaskEventPublisher eventPublisher;
+    private final TaskDeadLetterDispatcher deadLetterDispatcher;
     private final FailureClassifier defaultFailureClassifier = new DefaultFailureClassifier();
 
     public RetryEngine(TaskStore taskStore) {
@@ -126,6 +129,21 @@ public class RetryEngine {
                        RetryProperties retryProperties,
                        FailureClassifier failureClassifier,
                        TaskEventPublisher eventPublisher) {
+        this(taskStore, metricsRecorder, auditRecorder, alertService, exceptionFormatter,
+                retryStrategyRegistry, retryProperties, failureClassifier, eventPublisher,
+                new TaskDeadLetterDispatcher());
+    }
+
+    public RetryEngine(TaskStore taskStore,
+                       TaskMetricsRecorder metricsRecorder,
+                       TaskAuditRecorder auditRecorder,
+                       TaskAlertService alertService,
+                       TaskExceptionFormatter exceptionFormatter,
+                       RetryStrategyRegistry retryStrategyRegistry,
+                       RetryProperties retryProperties,
+                       FailureClassifier failureClassifier,
+                       TaskEventPublisher eventPublisher,
+                       TaskDeadLetterDispatcher deadLetterDispatcher) {
         this.taskStore = taskStore;
         this.metricsRecorder = metricsRecorder != null ? metricsRecorder : new NoopTaskMetricsRecorder();
         this.auditRecorder = auditRecorder != null ? auditRecorder : new NoopTaskAuditRecorder();
@@ -141,6 +159,9 @@ public class RetryEngine {
                 ? failureClassifier
                 : new DefaultFailureClassifier();
         this.eventPublisher = eventPublisher != null ? eventPublisher : new TaskEventPublisher();
+        this.deadLetterDispatcher = deadLetterDispatcher != null
+                ? deadLetterDispatcher
+                : new TaskDeadLetterDispatcher();
     }
 
     /**
@@ -209,6 +230,9 @@ public class RetryEngine {
         notifyDead(task, retriesExhausted ? "max retry exceeded: " + errorMessage
                 : deadNotifyReason(error, errorMessage, failureDecision));
         publishEvent(TaskEventType.DEAD, task, parseStatus(statusBefore), TaskStatus.DEAD, errorCode);
+        dispatchDeadLetter(task, errorCode, errorMessage,
+                retriesExhausted ? "max retry exceeded" : failureDecision.getReason(),
+                retriesExhausted);
     }
 
     /**
@@ -416,5 +440,18 @@ public class RetryEngine {
     private void publishEvent(TaskEventType eventType, TaskInstance task,
                               TaskStatus statusBefore, TaskStatus statusAfter, String reason) {
         eventPublisher.publish(TaskEvent.of(eventType, task, statusBefore, statusAfter, reason));
+    }
+
+    private void dispatchDeadLetter(TaskInstance task, String errorCode, String errorMessage,
+                                    String reason, boolean retriesExhausted) {
+        deadLetterDispatcher.dispatch(DeadLetterContext.builder()
+                .task(task)
+                .errorCode(errorCode)
+                .errorMessage(errorMessage)
+                .reason(reason)
+                .retriesExhausted(retriesExhausted)
+                .source("RetryEngine")
+                .deadAt(LocalDateTime.now())
+                .build());
     }
 }

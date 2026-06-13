@@ -26,6 +26,7 @@ recovers timed-out executions, and exposes admin APIs for operational visibility
 - [Quick Start](#quick-start)
 - [Installation](#installation)
 - [Configuration](#configuration)
+- [Admin Operational Queries](#admin-operational-queries)
 - [Production Checklist](#production-checklist)
 - [Security](#security)
 - [Testing](#testing)
@@ -84,7 +85,8 @@ ReliableTask is not a good fit when:
 | Failure classification | Override retry/dead decisions with a `FailureClassifier` bean; the default keeps `NonRetryableException -> DEAD`. |
 | Failure diagnostics | Format error codes, summaries, and compressed stack traces through an exception formatter SPI. |
 | Task event listeners | Observe lightweight state-change events such as submitted, started, succeeded, retry scheduled, dead, cancelled, requeued, and recovered. |
-| Admin APIs | Query tasks, view logs and stats, retry, requeue, cancel, update payloads, and inspect workers. |
+| Dead-letter handler SPI | Register `TaskDeadLetterHandler` beans for post-DEAD notification, archive, or compensation flows; the default handler is no-op. |
+| Admin APIs | Query tasks, v0.5 operational views, logs and stats, retry, requeue, cancel, update payloads, and inspect workers. |
 | Spring Boot starter | Enable store, executor, admin APIs, metrics, serializer, idempotency, and worker settings through auto-configuration. |
 
 ## Architecture
@@ -255,15 +257,26 @@ reliable-task:
     min-delay-ms: 0
     max-delay-ms: 300000
   admin:
-    enabled: true
+    enabled: false
     write-enabled: false
     max-page-size: 200
     max-batch-limit: 1000
+    query:
+      default-window-hours: 24
+      max-window-days: 30
+      default-limit: 50
+      max-limit: 200
+      slow-threshold-ms: 30000
     audit:
       enabled: false
+    auth:
+      enabled: true
     batch:
       enabled: false
 ```
+
+The runnable demo explicitly opts in to Admin APIs with `admin.enabled=true`, `write-enabled=true`,
+and `auth.enabled=false` for local exploration. Those demo settings are not production defaults.
 
 ### Implement a TaskHandler
 
@@ -366,7 +379,22 @@ TaskEventListener taskEventListener() {
 }
 ```
 
-ReliableTask publishes events for submit, worker claim/start, success, retry scheduling, dead, manual cancel, manual requeue/retry, and timeout recovery. It does not provide a general event bus, async listener queue, or status history query API.
+ReliableTask publishes events for submit, worker claim/start, success, retry scheduling, dead, manual cancel, manual requeue/retry, and timeout recovery. It does not provide a general event bus, async listener queue, or full event-sourcing history.
+
+### Dead Letter Handler SPI
+
+`TaskDeadLetterHandler` is the post-DEAD extension point for notification, archive, or compensation code. The starter registers a no-op handler and a `TaskDeadLetterDispatcher` by default. Multiple handler beans are called synchronously in Spring bean order after the task state has been written to `DEAD`; handler exceptions are logged and isolated.
+
+```java
+@Bean
+TaskDeadLetterHandler taskDeadLetterHandler() {
+    return context -> log.warn("dead task: taskId={}, type={}, errorCode={}, reason={}",
+            context.getTask().getId(),
+            context.getTask().getTaskType(),
+            context.getErrorCode(),
+            context.getReason());
+}
+```
 
 ## Configuration
 
@@ -391,19 +419,56 @@ ReliableTask properties use the `reliable-task` prefix.
 | `reliable-task.metrics.include-worker-id-tag` | `false` | Adds `worker_id` to execution metrics only when explicitly enabled; disabled by default to avoid high-cardinality series. |
 | `reliable-task.metrics.stats-cache-ttl-ms` | `5000` | Cache TTL for task stats gauges, so one scrape does not repeatedly query task stats. |
 | `reliable-task.alert.enabled` | `false` | Enables alert scanning. |
-| `reliable-task.admin.enabled` | `true` | Registers Admin REST APIs; write operations are controlled separately. |
+| `reliable-task.admin.enabled` | `false` | Registers Admin REST APIs when explicitly enabled; write operations are controlled separately. |
 | `reliable-task.admin.write-enabled` | `false` | Enables Admin write APIs such as retry, cancel, requeue, payload update, and batch operations. |
 | `reliable-task.admin.max-page-size` | `200` | Upper bound for Admin list page sizes. |
 | `reliable-task.admin.max-batch-limit` | `1000` | Upper bound for Admin batch operation limits. |
-| `reliable-task.admin.auth.enabled` | `false` | Enables admin authorization SPI checks. |
+| `reliable-task.admin.query.default-window-hours` | `24` | Default time window for new operational Admin queries when no explicit time range is provided. |
+| `reliable-task.admin.query.max-window-days` | `30` | Maximum allowed time window for new operational Admin queries. |
+| `reliable-task.admin.query.default-limit` | `50` | Default row limit for new operational Admin queries. |
+| `reliable-task.admin.query.max-limit` | `200` | Maximum row limit for new operational Admin queries. |
+| `reliable-task.admin.query.slow-threshold-ms` | `30000` | Default slow-task threshold in milliseconds for slow-task operational queries. |
+| `reliable-task.admin.auth.enabled` | `true` | Enables admin authorization SPI checks when Admin APIs are registered. |
 | `reliable-task.admin.audit.enabled` | `false` | Enables admin operation auditing and audit-log query endpoints. |
 | `reliable-task.admin.batch.enabled` | `false` | Enables limited batch operation APIs. Disabled endpoints return 404. |
 
+The `admin.query.*` defaults apply to v0.5 operational queries such as recent failures,
+slow tasks, failure aggregation, and timeline-related list views. Existing `/tasks` and
+`/audit-logs` list APIs keep their compatible filtering behavior and do not receive an
+implicit 24-hour time window.
+
 Reserved compatibility properties are still bindable but are not wired to behavior in `0.3.0`: `reliable-task.serializer.type` does not switch serializers, so provide a `TaskPayloadSerializer` bean instead; `reliable-task.store.table-prefix` does not change MyBatis table names; `reliable-task.admin.port` and `reliable-task.admin.context-path` do not create a separate management server or change the current `/api/reliable-task` mapping.
 
-See [application-example.yml](reliable-task-demo/src/main/resources/application-example.yml) for a runnable demo configuration.
+See [application-example.yml](reliable-task-demo/src/main/resources/application-example.yml) for a runnable demo configuration. It is a local opt-in example, not a production default profile.
 
 Micrometer execution counters and timers use low-cardinality `task_type` and `status` tags by default. Queue-health gauges include `reliable_task_backlog_total`, `reliable_task_oldest_pending_age_seconds`, pending/running/dead totals, worker available capacity, and `reliable_task_recovered_total` for timeout recovery events.
+
+Production monitoring and incident response templates are available in the [monitoring guide](docs/operations/reliable-task-monitoring.md), [runbook](docs/operations/reliable-task-runbook.md), and [Prometheus alerts example](docs/operations/prometheus-alerts-example.yml).
+
+## Admin Operational Queries
+
+ReliableTask v0.5 adds bounded read-only Admin queries for production troubleshooting. These
+queries use `admin.query.*` defaults when callers do not provide an explicit time range or limit.
+They do not change the compatible behavior of the existing `/tasks` and `/audit-logs` list APIs.
+
+| Endpoint | Purpose | Key parameters |
+| --- | --- | --- |
+| `GET /api/reliable-task/tasks/recent-failures` | Recent failed executions | `taskType`, `errorCode`, `createTimeStart`, `createTimeEnd`, `limit` |
+| `GET /api/reliable-task/tasks/slow` | Slow execution records | `taskType`, `durationMsGte`, `createTimeStart`, `createTimeEnd`, `limit` |
+| `GET /api/reliable-task/tasks/failure-top` | Failure aggregation | `groupBy`, `taskType`, `createTimeStart`, `createTimeEnd`, `limit` |
+| `GET /api/reliable-task/tasks/{id}/timeline` | Task lifecycle timeline | `id` |
+
+Defaults: no time range means the recent 24 hours; `limit` defaults to 50 and is capped at 200;
+slow-task queries default to `durationMsGte=30000`. Recent failures are filtered from execution
+logs where the execution result is failed. Slow tasks are sorted by `durationMs` descending.
+Error messages returned by these list views are summarized instead of returning unbounded stack traces.
+Failure aggregation defaults to `groupBy=taskType,errorCode` and supports only `taskType`,
+`errorCode`, or `taskType,errorCode`; invalid `groupBy` values return 400. Blank error codes are
+grouped as `UNKNOWN`, and `failure-top` uses a smaller default `limit=20` capped at 100.
+Timeline combines the task row, execution logs, and Admin audit logs, sorted by event time with
+same-time ordering `SUBMITTED -> LOG -> AUDIT -> CURRENT`. It is a lightweight troubleshooting view,
+not a full event-sourcing history; if audit logging is disabled, submitted, execution-log, and current
+state entries are still returned.
 
 ## Production Checklist
 
@@ -412,9 +477,11 @@ Before using ReliableTask outside a demo environment:
 - Database: use MySQL 8+, apply `schema.sql`, use a dedicated database user, back up task tables, and plan retention or archiving for task, log, audit, worker, and batch-operation tables.
 - Capacity: size `worker.batch-size`, `worker.max-batch-size`, thread pools, queue capacity, and `recovery.max-reset-per-scan` for expected throughput; keep Admin page and batch limits bounded.
 - Handler idempotency: define the business idempotency key for every task type, protect external side effects, set explicit HTTP/RPC timeouts, and separate retryable from non-retryable failures.
+- Payload and diagnostics: do not store credentials, tokens, private keys, raw personal identifiers, or sensitive customer data in task payloads, error messages, audit details, idempotency keys, or logs.
 - Lease and recovery: set `worker.lock-ttl-seconds` and handler `timeoutMs()` according to real handler duration; verify recovery behavior with MySQL integration tests before relying on it.
-- Admin security: keep Admin write APIs disabled unless needed; if enabled, protect them with authentication, authorization, audit logging, network controls, and operator accountability.
-- Observability: enable logs, metrics, alerts, and dashboards for pending backlog, oldest pending age, retry rate, dead tasks, recovery resets, and stale workers.
+- Admin security: keep Admin APIs on an internal operations network, keep `reliable-task.admin.auth.enabled=true`, keep write APIs disabled unless needed, and require authentication, authorization, audit logging, network controls, and operator accountability before enabling writes.
+- Observability: enable logs, metrics, alerts, and dashboards for pending backlog, oldest pending age, retry rate, dead tasks, recovery resets, stale workers, and worker capacity; tune thresholds from the [monitoring guide](docs/operations/reliable-task-monitoring.md) and [Prometheus example](docs/operations/prometheus-alerts-example.yml) instead of copying placeholders blindly.
+- Runbook: rehearse the [production runbook](docs/operations/reliable-task-runbook.md) for backlog growth, dead-task spikes, retry storms, recovery spikes, stale workers, and Admin write operations.
 - Verification: run `mvn -B test` and at least one real MySQL integration profile (`mysql-it` or `mysql-local-it`) before release; document any environment-blocked validation separately.
 
 ## Security
@@ -422,7 +489,7 @@ Before using ReliableTask outside a demo environment:
 - Do not commit real `application.yml`, `.env`, database credentials, tokens, cookies, internal URLs, or private keys.
 - Keep local configuration in ignored files or environment variables.
 - `application-example.yml` and `.env.example` must contain placeholders only.
-- Admin read APIs are enabled by default, while write APIs are disabled by default. Enable `reliable-task.admin.write-enabled=true` only for local demos or protected internal operations, and add authentication, authorization, audit logging, monitoring, and network access controls before production use.
+- Admin REST APIs are disabled by default. Enable `reliable-task.admin.enabled=true` only for local demos or protected internal operations, keep `reliable-task.admin.auth.enabled=true` in production, and enable `reliable-task.admin.write-enabled=true` only with authentication, authorization, audit logging, monitoring, and network access controls.
 - Report vulnerabilities through [SECURITY.md](SECURITY.md). Do not disclose exploitable details in public issues.
 
 ## Testing
@@ -470,7 +537,7 @@ The repository keeps only `.env.example` and `application-example.yml` with plac
 ### Can Admin APIs be exposed directly in production?
 
 No. Admin write APIs are disabled by default and must not be exposed directly to the public internet.
-Production deployments that enable `reliable-task.admin.write-enabled=true` must add authentication, authorization, audit logging, network access control, and monitoring.
+Production deployments that enable `reliable-task.admin.enabled=true` should keep authorization checks enabled. If they also enable `reliable-task.admin.write-enabled=true`, they must add authentication, authorization, audit logging, network access control, and monitoring.
 
 ### Is the current preview available on Maven Central?
 

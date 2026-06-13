@@ -6,6 +6,29 @@ This project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Add the v0.5 production operations scope and acceptance baseline in `docs/review/RELIABLE_TASK_V05_SCOPE.md`.
+- Add bounded Admin read APIs for recent failed executions and slow execution records.
+- Add bounded Admin failure-top aggregation API by task type and error code.
+- Add lightweight Admin task lifecycle timeline API based on task rows, execution logs, and audit logs.
+- Add `TaskDeadLetterHandler` SPI, no-op default handler, and dead-letter dispatcher auto-configuration.
+- Wire dead-letter dispatch into no-handler and RetryEngine DEAD paths after successful DEAD state writes.
+- Add production monitoring, Prometheus alert examples, and incident runbook documentation under `docs/operations`.
+- Add the v0.5 readiness report in `docs/review/RELIABLE_TASK_V05_READINESS_REPORT.md`.
+
+### Changed
+
+- Align Admin configuration defaults across metadata, README, demo documentation, and starter tests: Admin REST APIs are disabled by default, Admin write operations remain disabled, and Admin authorization checks are enabled by default when Admin is explicitly registered.
+- Clarify reserved configuration keys for serializer type, store table prefix, Admin port, and Admin context path.
+- Add Admin operational query guard configuration for default time windows, maximum windows, default limits, maximum limits, and slow-task thresholds without changing existing `/tasks` and `/audit-logs` list behavior.
+- Expand production adoption, demo, and release-process documentation for v0.5 operational queries, dead-letter SPI, runbooks, Admin safety, payload sensitivity, alert thresholds, MySQL validation profiles, and recovery readiness.
+
+### Planned
+
+- Plan v0.5.x production operations work for Admin query governance, recent failure and slow-task queries, failure-top aggregation, task timeline, dead-letter SPI, monitoring templates, runbooks, production checklist updates, and configuration metadata consistency.
+- Keep v0.6/v0.7 items out of v0.5 scope, including `TaskStore` splitting, Web console, multi-store backends, MQ/Kafka backends, Redis locks, and workflow orchestration.
+
 ## [0.3.0] - 2026-06-12
 
 ### Added

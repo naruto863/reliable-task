@@ -1,6 +1,9 @@
 package com.reliabletask.core.spi;
 
 import com.reliabletask.core.dto.PageResult;
+import com.reliabletask.core.dto.FailureTopQueryRequest;
+import com.reliabletask.core.dto.SlowTaskQueryRequest;
+import com.reliabletask.core.dto.TaskFailureQueryRequest;
 import com.reliabletask.core.dto.TaskQueryRequest;
 import com.reliabletask.core.enums.TaskStatus;
 import com.reliabletask.core.model.AuditLog;
@@ -9,8 +12,12 @@ import com.reliabletask.core.model.TaskExecutionLease;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.WorkerHeartbeat;
 import com.reliabletask.core.vo.TaskDetailVO;
+import com.reliabletask.core.vo.FailureTopVO;
+import com.reliabletask.core.vo.SlowTaskVO;
+import com.reliabletask.core.vo.TaskFailureVO;
 import com.reliabletask.core.vo.TaskLogVO;
 import com.reliabletask.core.vo.TaskStatsVO;
+import com.reliabletask.core.vo.TaskTimelineItemVO;
 import com.reliabletask.core.vo.TaskVO;
 
 import java.time.LocalDateTime;
@@ -559,6 +566,54 @@ public interface TaskStore {
                                            LocalDateTime createTimeStart,
                                            LocalDateTime createTimeEnd,
                                            int limit) {
+        return List.of();
+    }
+
+    /**
+     * 查询最近失败执行记录。
+     *
+     * <p>默认返回空列表，保持自定义存储实现兼容；支持 Admin v0.5 运维查询的存储实现应覆盖。
+     *
+     * @param request 查询条件
+     * @return 最近失败记录
+     */
+    default List<TaskFailureVO> listRecentFailures(TaskFailureQueryRequest request) {
+        return List.of();
+    }
+
+    /**
+     * 查询慢执行任务记录。
+     *
+     * <p>默认返回空列表，保持自定义存储实现兼容；支持 Admin v0.5 运维查询的存储实现应覆盖。
+     *
+     * @param request 查询条件
+     * @return 慢任务记录
+     */
+    default List<SlowTaskVO> listSlowTasks(SlowTaskQueryRequest request) {
+        return List.of();
+    }
+
+    /**
+     * 查询失败 Top 聚合。
+     *
+     * <p>默认返回空列表，保持自定义存储实现兼容；支持 Admin v0.5 运维查询的存储实现应覆盖。
+     *
+     * @param request 查询条件
+     * @return 失败 Top 聚合结果
+     */
+    default List<FailureTopVO> listFailureTop(FailureTopQueryRequest request) {
+        return List.of();
+    }
+
+    /**
+     * 查询任务生命周期时间线。
+     *
+     * <p>默认返回空列表，保持自定义存储实现兼容；支持 Admin v0.5 运维查询的存储实现应覆盖。
+     *
+     * @param taskId 任务 ID
+     * @return 任务生命周期时间线
+     */
+    default List<TaskTimelineItemVO> getTaskTimeline(Long taskId) {
         return List.of();
     }
 }

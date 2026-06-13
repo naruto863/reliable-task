@@ -45,6 +45,12 @@ reliable-task:
     scan-interval-ms: 30000
   idempotency:
     strategy: STRICT_UNIQUE
+  # serializer.type is reserved; provide a TaskPayloadSerializer Bean to customize serialization.
+  # serializer:
+  #   type: JACKSON
+  # store.table-prefix is reserved; current MyBatis table names are fixed.
+  # store:
+  #   table-prefix: ""
   executor:
     default-core-size: 4
     default-max-size: 16
@@ -55,9 +61,14 @@ reliable-task:
         core-size: 8
         max-size: 16
         queue-capacity: 200
+  # Demo opts in to Admin APIs for local exploration.
+  # Production defaults are admin.enabled=false, write-enabled=false, auth.enabled=true.
   admin:
     enabled: true
     write-enabled: true
+    # port/context-path are reserved; Admin APIs stay under /api/reliable-task on the application server.
+    # port: 9090
+    # context-path: /reliable-task
     audit:
       enabled: false
     auth:

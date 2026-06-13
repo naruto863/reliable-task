@@ -2,7 +2,10 @@ package com.reliabletask.admin.controller;
 
 import com.reliabletask.admin.metrics.TaskMetricsCollector;
 import com.reliabletask.admin.model.Result;
+import com.reliabletask.core.dto.FailureTopQueryRequest;
 import com.reliabletask.core.dto.PageResult;
+import com.reliabletask.core.dto.SlowTaskQueryRequest;
+import com.reliabletask.core.dto.TaskFailureQueryRequest;
 import com.reliabletask.core.dto.TaskQueryRequest;
 import com.reliabletask.core.enums.TaskEventType;
 import com.reliabletask.core.enums.TaskStatus;
@@ -16,8 +19,12 @@ import com.reliabletask.core.spi.TaskAuthorizationProvider;
 import com.reliabletask.core.spi.TaskStore;
 import com.reliabletask.core.spi.noop.NoopTaskAuthorizationProvider;
 import com.reliabletask.core.vo.TaskDetailVO;
+import com.reliabletask.core.vo.FailureTopVO;
+import com.reliabletask.core.vo.SlowTaskVO;
+import com.reliabletask.core.vo.TaskFailureVO;
 import com.reliabletask.core.vo.TaskLogVO;
 import com.reliabletask.core.vo.TaskStatsVO;
+import com.reliabletask.core.vo.TaskTimelineItemVO;
 import com.reliabletask.core.vo.TaskVO;
 import org.springframework.web.bind.annotation.*;
 
@@ -43,6 +50,8 @@ public class TaskAdminController {
     private static final String TASK_AUDIT_VIEW = "TASK_AUDIT_VIEW";
     private static final int DEFAULT_MAX_PAGE_SIZE = TaskQueryRequest.DEFAULT_MAX_PAGE_SIZE;
     private static final int DEFAULT_MAX_BATCH_LIMIT = 1000;
+    private static final int DEFAULT_FAILURE_TOP_LIMIT = 20;
+    private static final int HARD_MAX_FAILURE_TOP_LIMIT = 100;
 
     private final TaskStore taskStore;
     private final boolean authEnabled;
@@ -54,6 +63,7 @@ public class TaskAdminController {
     private final int maxBatchLimit;
     private final boolean writeEnabled;
     private final TaskEventPublisher eventPublisher;
+    private final AdminQueryGuard adminQueryGuard;
 
     public TaskAdminController(TaskStore taskStore) {
         this(taskStore, false, new NoopTaskAuthorizationProvider(), 60L, true, true,
@@ -120,6 +130,21 @@ public class TaskAdminController {
                                int maxBatchLimit,
                                boolean writeEnabled,
                                TaskEventPublisher eventPublisher) {
+        this(taskStore, authEnabled, authorizationProvider, staleWorkerThresholdSeconds, auditEnabled, batchEnabled,
+                maxPageSize, maxBatchLimit, writeEnabled, eventPublisher, AdminQueryGuard.defaults());
+    }
+
+    public TaskAdminController(TaskStore taskStore,
+                               boolean authEnabled,
+                               TaskAuthorizationProvider authorizationProvider,
+                               long staleWorkerThresholdSeconds,
+                               boolean auditEnabled,
+                               boolean batchEnabled,
+                               int maxPageSize,
+                               int maxBatchLimit,
+                               boolean writeEnabled,
+                               TaskEventPublisher eventPublisher,
+                               AdminQueryGuard adminQueryGuard) {
         this.taskStore = taskStore;
         this.authEnabled = authEnabled;
         this.authorizationProvider = authorizationProvider;
@@ -130,6 +155,7 @@ public class TaskAdminController {
         this.maxBatchLimit = normalizeConfiguredMax(maxBatchLimit, DEFAULT_MAX_BATCH_LIMIT);
         this.writeEnabled = writeEnabled;
         this.eventPublisher = eventPublisher != null ? eventPublisher : new TaskEventPublisher();
+        this.adminQueryGuard = adminQueryGuard != null ? adminQueryGuard : AdminQueryGuard.defaults();
     }
 
     /**
@@ -175,6 +201,108 @@ public class TaskAdminController {
     }
 
     /**
+     * 查询最近失败执行记录。
+     */
+    @GetMapping("/tasks/recent-failures")
+    public Result<List<TaskFailureVO>> listRecentFailures(
+            @RequestParam(required = false) String taskType,
+            @RequestParam(required = false) String errorCode,
+            @RequestParam(required = false) LocalDateTime createTimeStart,
+            @RequestParam(required = false) LocalDateTime createTimeEnd,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator) {
+        Result<List<TaskFailureVO>> forbidden = forbidIfNeeded(TASK_VIEW, operator, null, false, null);
+        if (forbidden != null) {
+            return forbidden;
+        }
+
+        AdminQueryGuard.NormalizedQuery normalized;
+        try {
+            normalized = normalizeOperationalQuery(createTimeStart, createTimeEnd, limit, null);
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
+        }
+
+        TaskFailureQueryRequest request = TaskFailureQueryRequest.builder()
+                .taskType(taskType)
+                .errorCode(errorCode)
+                .createTimeStart(normalized.createTimeStart())
+                .createTimeEnd(normalized.createTimeEnd())
+                .limit(normalized.limit())
+                .build();
+        return Result.success(taskStore.listRecentFailures(request));
+    }
+
+    /**
+     * 查询慢执行任务记录。
+     */
+    @GetMapping("/tasks/slow")
+    public Result<List<SlowTaskVO>> listSlowTasks(
+            @RequestParam(required = false) String taskType,
+            @RequestParam(required = false) Long durationMsGte,
+            @RequestParam(required = false) LocalDateTime createTimeStart,
+            @RequestParam(required = false) LocalDateTime createTimeEnd,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator) {
+        Result<List<SlowTaskVO>> forbidden = forbidIfNeeded(TASK_VIEW, operator, null, false, null);
+        if (forbidden != null) {
+            return forbidden;
+        }
+
+        AdminQueryGuard.NormalizedQuery normalized;
+        try {
+            normalized = normalizeOperationalQuery(createTimeStart, createTimeEnd, limit, null);
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
+        }
+
+        SlowTaskQueryRequest request = SlowTaskQueryRequest.builder()
+                .taskType(taskType)
+                .durationMsGte(normalizeSlowThresholdMs(durationMsGte))
+                .createTimeStart(normalized.createTimeStart())
+                .createTimeEnd(normalized.createTimeEnd())
+                .limit(normalized.limit())
+                .build();
+        return Result.success(taskStore.listSlowTasks(request));
+    }
+
+    /**
+     * 查询失败 Top 聚合。
+     */
+    @GetMapping("/tasks/failure-top")
+    public Result<List<FailureTopVO>> listFailureTop(
+            @RequestParam(required = false) String groupBy,
+            @RequestParam(required = false) String taskType,
+            @RequestParam(required = false) LocalDateTime createTimeStart,
+            @RequestParam(required = false) LocalDateTime createTimeEnd,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator) {
+        Result<List<FailureTopVO>> forbidden = forbidIfNeeded(TASK_VIEW, operator, null, false, null);
+        if (forbidden != null) {
+            return forbidden;
+        }
+
+        String normalizedGroupBy;
+        AdminQueryGuard.NormalizedQuery normalized;
+        try {
+            normalizedGroupBy = normalizeFailureTopGroupBy(groupBy);
+            normalized = normalizeOperationalQuery(createTimeStart, createTimeEnd,
+                    normalizeFailureTopLimit(limit), null);
+        } catch (IllegalArgumentException e) {
+            return Result.error(400, e.getMessage());
+        }
+
+        FailureTopQueryRequest request = FailureTopQueryRequest.builder()
+                .groupBy(normalizedGroupBy)
+                .taskType(taskType)
+                .createTimeStart(normalized.createTimeStart())
+                .createTimeEnd(normalized.createTimeEnd())
+                .limit(normalized.limit())
+                .build();
+        return Result.success(taskStore.listFailureTop(request));
+    }
+
+    /**
      * 查询任务详情
      */
     @GetMapping("/tasks/{id}")
@@ -203,6 +331,24 @@ public class TaskAdminController {
         }
         List<TaskLogVO> logs = taskStore.getTaskLogs(id);
         return Result.success(logs);
+    }
+
+    /**
+     * 查询任务生命周期时间线
+     */
+    @GetMapping("/tasks/{id}/timeline")
+    public Result<List<TaskTimelineItemVO>> getTaskTimeline(@PathVariable Long id,
+                                                            @RequestHeader(value = "X-Operator", defaultValue = "anonymous")
+                                                            String operator) {
+        Result<List<TaskTimelineItemVO>> forbidden = forbidIfNeeded(TASK_VIEW, operator, id, false, null);
+        if (forbidden != null) {
+            return forbidden;
+        }
+        TaskDetailVO detail = taskStore.getTaskDetail(id);
+        if (detail == null) {
+            return Result.error(404, "Task not found: " + id);
+        }
+        return Result.success(taskStore.getTaskTimeline(id));
     }
 
     /**
@@ -659,6 +805,42 @@ public class TaskAdminController {
             return Math.min(TaskQueryRequest.DEFAULT_PAGE_SIZE, maxPageSize);
         }
         return Math.min(pageSize, maxPageSize);
+    }
+
+    AdminQueryGuard.NormalizedQuery normalizeOperationalQuery(LocalDateTime createTimeStart,
+                                                             LocalDateTime createTimeEnd,
+                                                             Integer limit,
+                                                             LocalDateTime now) {
+        return adminQueryGuard.normalize(createTimeStart, createTimeEnd, limit, now);
+    }
+
+    long normalizeSlowThresholdMs(Long durationMsGte) {
+        return adminQueryGuard.normalizeSlowThresholdMs(durationMsGte);
+    }
+
+    int normalizeFailureTopLimit(Integer limit) {
+        int maxLimit = Math.min(adminQueryGuard.getMaxLimit(), HARD_MAX_FAILURE_TOP_LIMIT);
+        if (limit == null || limit <= 0) {
+            return Math.min(DEFAULT_FAILURE_TOP_LIMIT, maxLimit);
+        }
+        return Math.min(limit, maxLimit);
+    }
+
+    String normalizeFailureTopGroupBy(String groupBy) {
+        if (groupBy == null || groupBy.isBlank()) {
+            return "taskType,errorCode";
+        }
+        String normalized = groupBy.replace(" ", "");
+        if ("taskType".equals(normalized)
+                || "errorCode".equals(normalized)
+                || "taskType,errorCode".equals(normalized)) {
+            return normalized;
+        }
+        throw new IllegalArgumentException("groupBy must be one of: taskType, errorCode, taskType,errorCode");
+    }
+
+    AdminQueryGuard adminQueryGuard() {
+        return adminQueryGuard;
     }
 
     private int normalizeConfiguredMax(int configuredMax, int hardMax) {

@@ -2,8 +2,10 @@ package com.reliabletask.executor.handler;
 
 import com.reliabletask.core.enums.TaskEventType;
 import com.reliabletask.core.enums.TaskStatus;
+import com.reliabletask.core.deadletter.TaskDeadLetterDispatcher;
 import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.model.AuditLog;
+import com.reliabletask.core.model.DeadLetterContext;
 import com.reliabletask.core.model.TaskEvent;
 import com.reliabletask.core.model.TaskExecutionLease;
 import com.reliabletask.core.model.TaskInstance;
@@ -61,6 +63,7 @@ public class TaskExecutor {
     private final TaskAuditRecorder auditRecorder;
     private final TaskAlertService alertService;
     private final TaskEventPublisher eventPublisher;
+    private final TaskDeadLetterDispatcher deadLetterDispatcher;
     private final ScheduledExecutorService leaseRenewalExecutor;
     private final ConcurrentMap<String, Semaphore> concurrencyLimiters = new ConcurrentHashMap<>();
 
@@ -122,6 +125,21 @@ public class TaskExecutor {
                         TaskAuditRecorder auditRecorder,
                         TaskAlertService alertService,
                         TaskEventPublisher eventPublisher) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, interceptor,
+                payloadSerializer, workerProperties, metricsRecorder, auditRecorder,
+                alertService, eventPublisher, new TaskDeadLetterDispatcher());
+    }
+
+    public TaskExecutor(TaskStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskExecutionInterceptor interceptor,
+                        TaskPayloadSerializer payloadSerializer,
+                        WorkerProperties workerProperties,
+                        TaskMetricsRecorder metricsRecorder,
+                        TaskAuditRecorder auditRecorder,
+                        TaskAlertService alertService,
+                        TaskEventPublisher eventPublisher,
+                        TaskDeadLetterDispatcher deadLetterDispatcher) {
         this.taskStore = taskStore;
         this.handlerRegistry = handlerRegistry;
         this.executorFactory = executorFactory;
@@ -133,6 +151,9 @@ public class TaskExecutor {
         this.auditRecorder = auditRecorder != null ? auditRecorder : new NoopTaskAuditRecorder();
         this.alertService = alertService != null ? alertService : new NoopTaskAlertService();
         this.eventPublisher = eventPublisher != null ? eventPublisher : new TaskEventPublisher();
+        this.deadLetterDispatcher = deadLetterDispatcher != null
+                ? deadLetterDispatcher
+                : new TaskDeadLetterDispatcher();
         this.leaseRenewalExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread thread = new Thread(r, "reliable-task-lease-renewal");
             thread.setDaemon(true);
@@ -169,6 +190,8 @@ public class TaskExecutor {
                 recordAudit(task, "SYSTEM_NO_HANDLER_DEAD", "SUCCESS", e.getMessage());
                 notifyDead(task, "no handler found: " + e.getMessage());
                 publishEvent(TaskEventType.DEAD, task, TaskStatus.RUNNING, TaskStatus.DEAD, "NO_HANDLER");
+                dispatchDeadLetter(task, "NO_HANDLER", e.getMessage(),
+                        "no handler found: " + e.getMessage());
                 return;
             }
 
@@ -390,5 +413,17 @@ public class TaskExecutor {
     private void publishEvent(TaskEventType eventType, TaskInstance task,
                               TaskStatus statusBefore, TaskStatus statusAfter, String reason) {
         eventPublisher.publish(TaskEvent.of(eventType, task, statusBefore, statusAfter, reason));
+    }
+
+    private void dispatchDeadLetter(TaskInstance task, String errorCode, String errorMessage, String reason) {
+        deadLetterDispatcher.dispatch(DeadLetterContext.builder()
+                .task(task)
+                .errorCode(errorCode)
+                .errorMessage(errorMessage)
+                .reason(reason)
+                .retriesExhausted(false)
+                .source("TaskExecutor")
+                .deadAt(LocalDateTime.now())
+                .build());
     }
 }

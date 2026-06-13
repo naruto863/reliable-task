@@ -1,5 +1,6 @@
 package com.reliabletask.starter.autoconfigure;
 
+import com.reliabletask.admin.controller.AdminQueryGuard;
 import com.reliabletask.admin.controller.TaskAdminController;
 import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.spi.TaskAuthorizationProvider;
@@ -39,6 +40,7 @@ public class ReliableTaskAdminAutoConfiguration {
                                                    ReliableTaskProperties properties,
                                                    ObjectProvider<TaskAuthorizationProvider> authorizationProvider,
                                                    ObjectProvider<TaskEventPublisher> eventPublisher) {
+        ReliableTaskProperties.Admin.Query query = properties.getAdmin().getQuery();
         return new TaskAdminController(taskStore,
                 properties.getAdmin().getAuth().isEnabled(),
                 authorizationProvider.getIfAvailable(),
@@ -48,6 +50,11 @@ public class ReliableTaskAdminAutoConfiguration {
                 properties.getAdmin().getMaxPageSize(),
                 properties.getAdmin().getMaxBatchLimit(),
                 properties.getAdmin().isWriteEnabled(),
-                eventPublisher.getIfAvailable(TaskEventPublisher::new));
+                eventPublisher.getIfAvailable(TaskEventPublisher::new),
+                new AdminQueryGuard(query.getDefaultWindowHours(),
+                        query.getMaxWindowDays(),
+                        query.getDefaultLimit(),
+                        query.getMaxLimit(),
+                        query.getSlowThresholdMs()));
     }
 }

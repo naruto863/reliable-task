@@ -4,7 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.reliabletask.core.dto.FailureTopQueryRequest;
 import com.reliabletask.core.dto.PageResult;
+import com.reliabletask.core.dto.SlowTaskQueryRequest;
+import com.reliabletask.core.dto.TaskFailureQueryRequest;
 import com.reliabletask.core.dto.TaskQueryRequest;
 import com.reliabletask.core.enums.RetryStrategyType;
 import com.reliabletask.core.enums.TaskStatus;
@@ -13,9 +16,13 @@ import com.reliabletask.core.model.BatchOperationResult;
 import com.reliabletask.core.model.TaskExecutionLease;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.WorkerHeartbeat;
+import com.reliabletask.core.vo.FailureTopVO;
 import com.reliabletask.core.vo.TaskDetailVO;
+import com.reliabletask.core.vo.SlowTaskVO;
+import com.reliabletask.core.vo.TaskFailureVO;
 import com.reliabletask.core.vo.TaskLogVO;
 import com.reliabletask.core.vo.TaskStatsVO;
+import com.reliabletask.core.vo.TaskTimelineItemVO;
 import com.reliabletask.core.vo.TaskVO;
 import com.reliabletask.store.entity.ReliableTaskAuditLogEntity;
 import com.reliabletask.store.entity.ReliableTaskBatchOperationEntity;
@@ -686,6 +693,170 @@ class MyBatisTaskStoreTest {
         assertEquals("RUNNING", result.get(0).getStatusBefore());
         assertEquals("SUCCESS", result.get(0).getStatusAfter());
         assertEquals("成功", result.get(0).getStatusDesc());
+    }
+
+    @Test
+    @DisplayName("getTaskTimeline - 合并主表、执行日志和审计日志并稳定排序")
+    void getTaskTimeline_combinesSourcesAndSorts() {
+        LocalDateTime submittedAt = LocalDateTime.parse("2026-06-13T10:00:00");
+        LocalDateTime eventAt = LocalDateTime.parse("2026-06-13T10:01:00");
+
+        ReliableTaskEntity task = new ReliableTaskEntity();
+        task.setId(1L);
+        task.setStatus(TaskStatus.RUNNING.getCode());
+        task.setCreateTime(submittedAt);
+        task.setUpdateTime(eventAt);
+        task.setWorkerId("worker-1");
+        task.setTraceId("trace-task");
+        when(taskMapper.selectById(1L)).thenReturn(task);
+
+        ReliableTaskLogEntity log = new ReliableTaskLogEntity();
+        log.setId(10L);
+        log.setTaskId(1L);
+        log.setAttemptNo(1);
+        log.setStatusBefore("PENDING");
+        log.setStatusAfter("RUNNING");
+        log.setExecuteTime(eventAt);
+        log.setDurationMs(120L);
+        log.setStatus(TaskStatus.RUNNING.getCode());
+        log.setWorkerId("worker-1");
+        log.setTraceId("trace-log");
+        when(taskLogMapper.selectList(any())).thenReturn(List.of(log));
+
+        ReliableTaskAuditLogEntity audit = new ReliableTaskAuditLogEntity();
+        audit.setId(20L);
+        audit.setTaskId(1L);
+        audit.setOperationType("TASK_REQUEUE");
+        audit.setOperator("admin");
+        audit.setRequestSummary("manual requeue");
+        audit.setResult("SUCCESS");
+        audit.setTraceId("trace-audit");
+        audit.setCreateTime(eventAt);
+        when(auditLogMapper.selectList(any())).thenReturn(List.of(audit));
+
+        List<TaskTimelineItemVO> result = taskStore.getTaskTimeline(1L);
+
+        assertEquals(4, result.size());
+        assertEquals("SUBMITTED", result.get(0).getSource());
+        assertEquals("LOG", result.get(1).getSource());
+        assertEquals("AUDIT", result.get(2).getSource());
+        assertEquals("CURRENT", result.get(3).getSource());
+        assertEquals("PENDING", result.get(1).getStatusBefore());
+        assertEquals("RUNNING", result.get(1).getStatusAfter());
+        assertEquals(1, result.get(1).getAttemptNo());
+        assertEquals("admin", result.get(2).getOperator());
+        assertEquals("TASK_REQUEUE", result.get(2).getOperationType());
+        assertEquals("RUNNING", result.get(3).getStatusAfter());
+    }
+
+    @Test
+    @DisplayName("getTaskTimeline - 任务不存在返回空列表")
+    void getTaskTimeline_missingTaskReturnsEmpty() {
+        when(taskMapper.selectById(99L)).thenReturn(null);
+
+        List<TaskTimelineItemVO> result = taskStore.getTaskTimeline(99L);
+
+        assertTrue(result.isEmpty());
+        verify(taskLogMapper, never()).selectList(any());
+        verify(auditLogMapper, never()).selectList(any());
+    }
+
+    @Test
+    @DisplayName("listRecentFailures - 透传筛选条件并裁剪 limit")
+    void listRecentFailures_filtersAndClampsLimit() {
+        LocalDateTime start = LocalDateTime.parse("2026-06-12T10:00:00");
+        LocalDateTime end = LocalDateTime.parse("2026-06-13T10:00:00");
+        TaskFailureVO row = new TaskFailureVO();
+        row.setTaskId(1L);
+        row.setErrorMsg("x".repeat(1200));
+        when(taskLogMapper.selectRecentFailures(any(), any(), any(), any(), anyInt(), anyInt()))
+                .thenReturn(List.of(row));
+
+        List<TaskFailureVO> result = taskStore.listRecentFailures(TaskFailureQueryRequest.builder()
+                .taskType("CREATE_SHIPMENT")
+                .errorCode("TimeoutException")
+                .createTimeStart(start)
+                .createTimeEnd(end)
+                .limit(5000)
+                .build());
+
+        assertEquals(1, result.size());
+        assertEquals(1000, result.get(0).getErrorMsg().length());
+        verify(taskLogMapper).selectRecentFailures("CREATE_SHIPMENT", "TimeoutException",
+                start, end, 200, TaskStatus.FAILED.getCode());
+    }
+
+    @Test
+    @DisplayName("listSlowTasks - 默认阈值和 limit")
+    void listSlowTasks_usesDefaultThresholdAndLimit() {
+        SlowTaskVO row = new SlowTaskVO();
+        row.setTaskId(2L);
+        row.setDurationMs(45_000L);
+        when(taskLogMapper.selectSlowTasks(any(), anyLong(), any(), any(), anyInt()))
+                .thenReturn(List.of(row));
+
+        List<SlowTaskVO> result = taskStore.listSlowTasks(SlowTaskQueryRequest.builder()
+                .taskType(" ")
+                .durationMsGte(null)
+                .limit(-1)
+                .build());
+
+        assertEquals(1, result.size());
+        assertEquals(45_000L, result.get(0).getDurationMs());
+        verify(taskLogMapper).selectSlowTasks(null, 30_000L, null, null, 50);
+    }
+
+    @Test
+    @DisplayName("listFailureTop - 默认按 taskType,errorCode 聚合")
+    void listFailureTop_defaultsToTaskTypeAndErrorCode() {
+        LocalDateTime start = LocalDateTime.parse("2026-06-12T10:00:00");
+        LocalDateTime end = LocalDateTime.parse("2026-06-13T10:00:00");
+        FailureTopVO row = new FailureTopVO();
+        row.setTaskType("CREATE_SHIPMENT");
+        row.setErrorCode("TimeoutException");
+        row.setFailureCount(3L);
+        when(taskMapper.selectFailureTopByTaskTypeAndErrorCode(any(), any(), any(), anyInt(), anyInt()))
+                .thenReturn(List.of(row));
+
+        List<FailureTopVO> result = taskStore.listFailureTop(FailureTopQueryRequest.builder()
+                .taskType("CREATE_SHIPMENT")
+                .createTimeStart(start)
+                .createTimeEnd(end)
+                .limit(null)
+                .build());
+
+        assertEquals(1, result.size());
+        assertEquals(start, result.get(0).getCreateTimeStart());
+        assertEquals(end, result.get(0).getCreateTimeEnd());
+        verify(taskMapper).selectFailureTopByTaskTypeAndErrorCode("CREATE_SHIPMENT",
+                start, end, 20, TaskStatus.FAILED.getCode());
+    }
+
+    @Test
+    @DisplayName("listFailureTop - taskType 聚合并裁剪 limit")
+    void listFailureTop_groupByTaskTypeClampsLimit() {
+        when(taskMapper.selectFailureTopByTaskType(any(), any(), any(), anyInt(), anyInt()))
+                .thenReturn(List.of());
+
+        List<FailureTopVO> result = taskStore.listFailureTop(FailureTopQueryRequest.builder()
+                .groupBy("taskType")
+                .limit(5000)
+                .build());
+
+        assertTrue(result.isEmpty());
+        verify(taskMapper).selectFailureTopByTaskType(null, null, null, 100, TaskStatus.FAILED.getCode());
+    }
+
+    @Test
+    @DisplayName("listFailureTop - 非法 groupBy 拒绝")
+    void listFailureTop_invalidGroupByThrows() {
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> taskStore.listFailureTop(FailureTopQueryRequest.builder()
+                        .groupBy("workerId")
+                        .build()));
+
+        assertTrue(error.getMessage().contains("groupBy"));
+        verify(taskMapper, never()).selectFailureTopByErrorCode(any(), any(), any(), anyInt(), anyInt());
     }
 
     // ==================== getStats ====================

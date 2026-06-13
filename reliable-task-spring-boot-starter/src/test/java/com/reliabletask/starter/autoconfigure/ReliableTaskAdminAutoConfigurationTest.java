@@ -1,15 +1,18 @@
 package com.reliabletask.starter.autoconfigure;
 
+import com.reliabletask.admin.controller.AdminQueryGuard;
 import com.reliabletask.admin.controller.TaskAdminController;
 import com.reliabletask.core.spi.TaskAuthorizationProvider;
 import com.reliabletask.core.spi.TaskStore;
 import com.reliabletask.core.spi.noop.NoopTaskAuthorizationProvider;
+import com.reliabletask.starter.config.ReliableTaskProperties;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -28,8 +31,25 @@ class ReliableTaskAdminAutoConfigurationTest {
             .withUserConfiguration(TaskStoreTestConfiguration.class);
 
     @Test
-    @DisplayName("admin 启用且关闭鉴权时注册 TaskAdminController 和默认 provider")
-    void adminEnabledByDefault_registersController() {
+    @DisplayName("admin 默认关闭且鉴权默认开启")
+    void adminDisabledAndAuthEnabledByDefault_doesNotRegisterController() {
+        contextRunner.run(context -> {
+            assertThat(context).doesNotHaveBean(TaskAdminController.class);
+            assertThat(context).hasSingleBean(ReliableTaskProperties.class);
+            ReliableTaskProperties properties = context.getBean(ReliableTaskProperties.class);
+            assertThat(properties.getAdmin().isEnabled()).isFalse();
+            assertThat(properties.getAdmin().isWriteEnabled()).isFalse();
+            assertThat(properties.getAdmin().getAuth().isEnabled()).isTrue();
+            assertThat(properties.getAdmin().getAudit().isEnabled()).isFalse();
+            assertThat(properties.getAdmin().getBatch().isEnabled()).isFalse();
+            assertThat(properties.getAdmin().getPort()).isEqualTo(9090);
+            assertThat(properties.getAdmin().getContextPath()).isEqualTo("/reliable-task");
+        });
+    }
+
+    @Test
+    @DisplayName("admin 显式启用且关闭鉴权时注册 TaskAdminController 和默认 provider")
+    void adminExplicitlyEnabledAndAuthDisabled_registersController() {
         contextRunner
                 .withPropertyValues(
                         "reliable-task.admin.enabled=true",
@@ -74,6 +94,31 @@ class ReliableTaskAdminAutoConfigurationTest {
     }
 
     @Test
+    @DisplayName("admin query 配置会传递给 controller")
+    void adminQueryProperties_arePassedToController() {
+        contextRunner
+                .withPropertyValues(
+                        "reliable-task.admin.enabled=true",
+                        "reliable-task.admin.auth.enabled=false",
+                        "reliable-task.admin.query.default-window-hours=12",
+                        "reliable-task.admin.query.max-window-days=7",
+                        "reliable-task.admin.query.default-limit=25",
+                        "reliable-task.admin.query.max-limit=80",
+                        "reliable-task.admin.query.slow-threshold-ms=45000")
+                .run(context -> {
+                    TaskAdminController controller = context.getBean(TaskAdminController.class);
+                    AdminQueryGuard guard = (AdminQueryGuard) ReflectionTestUtils.getField(controller, "adminQueryGuard");
+
+                    assertThat(guard).isNotNull();
+                    assertThat(guard.getDefaultWindowHours()).isEqualTo(12);
+                    assertThat(guard.getMaxWindowDays()).isEqualTo(7);
+                    assertThat(guard.getDefaultLimit()).isEqualTo(25);
+                    assertThat(guard.getMaxLimit()).isEqualTo(80);
+                    assertThat(guard.getSlowThresholdMs()).isEqualTo(45_000L);
+                });
+    }
+
+    @Test
     @DisplayName("auth 开启且没有自定义 provider 时不注册默认 provider")
     void authEnabledWithoutProvider_doesNotRegisterNoopProvider() {
         contextRunner
@@ -92,9 +137,12 @@ class ReliableTaskAdminAutoConfigurationTest {
         TaskAuthorizationProvider customProvider = mock(TaskAuthorizationProvider.class);
 
         contextRunner
+                .withPropertyValues("reliable-task.admin.enabled=true")
                 .withBean(TaskAuthorizationProvider.class, () -> customProvider)
-                .run(context ->
-                        assertThat(context).getBean(TaskAuthorizationProvider.class).isSameAs(customProvider));
+                .run(context -> {
+                    assertThat(context).hasSingleBean(TaskAdminController.class);
+                    assertThat(context).getBean(TaskAuthorizationProvider.class).isSameAs(customProvider);
+                });
     }
 
     @Configuration(proxyBeanMethods = false)

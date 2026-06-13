@@ -4,8 +4,10 @@ import com.reliabletask.core.spi.AlarmNotifier;
 import com.reliabletask.core.diagnostics.DefaultTaskExceptionFormatter;
 import com.reliabletask.core.diagnostics.TaskExceptionFormatter;
 import com.reliabletask.core.classifier.DefaultFailureClassifier;
+import com.reliabletask.core.deadletter.TaskDeadLetterDispatcher;
 import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.spi.FailureClassifier;
+import com.reliabletask.core.spi.TaskDeadLetterHandler;
 import com.reliabletask.core.spi.TaskStore;
 import com.reliabletask.core.spi.TaskEventListener;
 import com.reliabletask.core.spi.TaskTemplate;
@@ -17,6 +19,7 @@ import com.reliabletask.core.spi.RetryStrategy;
 import com.reliabletask.core.spi.WorkerHeartbeatReporter;
 import com.reliabletask.core.spi.noop.NoopAlarmNotifier;
 import com.reliabletask.core.spi.noop.NoopTaskAuditRecorder;
+import com.reliabletask.core.spi.noop.NoopTaskDeadLetterHandler;
 import com.reliabletask.core.spi.noop.NoopTaskMetricsRecorder;
 import com.reliabletask.core.spi.noop.NoopWorkerHeartbeatReporter;
 import com.reliabletask.executor.alert.AlertProperties;
@@ -188,9 +191,10 @@ public class ReliableTaskExecutorAutoConfiguration {
                                    RetryStrategyRegistry retryStrategyRegistry,
                                    RetryProperties retryProperties,
                                    FailureClassifier failureClassifier,
-                                   TaskEventPublisher eventPublisher) {
+                                   TaskEventPublisher eventPublisher,
+                                   TaskDeadLetterDispatcher deadLetterDispatcher) {
         return new RetryEngine(taskStore, metricsRecorder, auditRecorder, alertService, exceptionFormatter,
-                retryStrategyRegistry, retryProperties, failureClassifier, eventPublisher);
+                retryStrategyRegistry, retryProperties, failureClassifier, eventPublisher, deadLetterDispatcher);
     }
 
     @Bean
@@ -203,6 +207,18 @@ public class ReliableTaskExecutorAutoConfiguration {
     @ConditionalOnMissingBean(FailureClassifier.class)
     public FailureClassifier failureClassifier() {
         return new DefaultFailureClassifier();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(TaskDeadLetterHandler.class)
+    public TaskDeadLetterHandler taskDeadLetterHandler() {
+        return new NoopTaskDeadLetterHandler();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(TaskDeadLetterDispatcher.class)
+    public TaskDeadLetterDispatcher taskDeadLetterDispatcher(List<TaskDeadLetterHandler> handlers) {
+        return new TaskDeadLetterDispatcher(handlers);
     }
 
     @Bean
@@ -323,10 +339,11 @@ public class ReliableTaskExecutorAutoConfiguration {
                                              TaskMetricsRecorder metricsRecorder,
                                              TaskAuditRecorder auditRecorder,
                                              TaskAlertService alertService,
-                                             TaskEventPublisher eventPublisher) {
+                                             TaskEventPublisher eventPublisher,
+                                             TaskDeadLetterDispatcher deadLetterDispatcher) {
         return new TaskExecutor(taskStore, handlerRegistry, executorFactory, retryEngine,
                 new TaskExecutionInterceptor(), payloadSerializer, workerProperties,
-                metricsRecorder, auditRecorder, alertService, eventPublisher);
+                metricsRecorder, auditRecorder, alertService, eventPublisher, deadLetterDispatcher);
     }
 
     // ==================== 任务模板 ====================

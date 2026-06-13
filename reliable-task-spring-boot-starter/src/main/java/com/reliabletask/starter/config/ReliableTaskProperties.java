@@ -58,15 +58,21 @@ import java.util.Map;
  *         queue-capacity: 200
  *   # store.table-prefix is reserved; current MyBatis implementation uses fixed table names.
  *   admin:
- *     enabled: true
+ *     enabled: false
  *     write-enabled: false
  *     max-page-size: 200
  *     max-batch-limit: 1000
+ *     query:
+ *       default-window-hours: 24
+ *       max-window-days: 30
+ *       default-limit: 50
+ *       max-limit: 200
+ *       slow-threshold-ms: 30000
  *     # port/context-path are reserved; Admin APIs are served by the application server under /api/reliable-task.
  *     audit:
  *       enabled: false
  *     auth:
- *       enabled: false
+ *       enabled: true
  *     batch:
  *       enabled: false
  * </pre>
@@ -427,6 +433,11 @@ public class ReliableTaskProperties {
         private int maxBatchLimit = 1000;
 
         /**
+         * Admin 运维查询保护配置
+         */
+        private Query query = new Query();
+
+        /**
          * 操作审计配置
          */
         private Audit audit = new Audit();
@@ -440,6 +451,34 @@ public class ReliableTaskProperties {
          * 批量运维配置
          */
         private Batch batch = new Batch();
+
+        @Data
+        public static class Query {
+            /**
+             * 新增运维查询默认时间窗口，单位小时，默认 24。
+             */
+            private int defaultWindowHours = 24;
+
+            /**
+             * 新增运维查询最大时间跨度，单位天，默认 30。
+             */
+            private int maxWindowDays = 30;
+
+            /**
+             * 新增运维查询默认返回条数，默认 50。
+             */
+            private int defaultLimit = 50;
+
+            /**
+             * 新增运维查询最大返回条数，默认 200。
+             */
+            private int maxLimit = 200;
+
+            /**
+             * 慢任务默认阈值，单位毫秒，默认 30000。
+             */
+            private long slowThresholdMs = 30_000L;
+        }
 
         @Data
         public static class Audit {

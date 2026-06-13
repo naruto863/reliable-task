@@ -1,7 +1,10 @@
 package com.reliabletask.admin.controller;
 
 import com.reliabletask.admin.model.Result;
+import com.reliabletask.core.dto.FailureTopQueryRequest;
 import com.reliabletask.core.dto.PageResult;
+import com.reliabletask.core.dto.SlowTaskQueryRequest;
+import com.reliabletask.core.dto.TaskFailureQueryRequest;
 import com.reliabletask.core.dto.TaskQueryRequest;
 import com.reliabletask.core.enums.TaskEventType;
 import com.reliabletask.core.enums.TaskStatus;
@@ -14,6 +17,10 @@ import com.reliabletask.core.model.WorkerHeartbeat;
 import com.reliabletask.core.spi.TaskAuthorizationProvider;
 import com.reliabletask.core.spi.TaskStore;
 import com.reliabletask.core.vo.TaskDetailVO;
+import com.reliabletask.core.vo.FailureTopVO;
+import com.reliabletask.core.vo.SlowTaskVO;
+import com.reliabletask.core.vo.TaskFailureVO;
+import com.reliabletask.core.vo.TaskTimelineItemVO;
 import com.reliabletask.core.vo.TaskVO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -102,6 +109,165 @@ class TaskAdminControllerTest {
     }
 
     @Test
+    @DisplayName("operation query - 默认最近 24 小时并使用默认 limit")
+    void normalizeOperationalQuery_appliesDefaultWindowAndLimit() {
+        LocalDateTime now = LocalDateTime.parse("2026-06-13T10:00:00");
+
+        AdminQueryGuard.NormalizedQuery normalized =
+                controller.normalizeOperationalQuery(null, null, null, now);
+
+        assertEquals(now.minusHours(24), normalized.createTimeStart());
+        assertEquals(now, normalized.createTimeEnd());
+        assertEquals(50, normalized.limit());
+        assertEquals(30_000L, controller.normalizeSlowThresholdMs(null));
+    }
+
+    @Test
+    @DisplayName("operation query - limit 裁剪到安全上限")
+    void normalizeOperationalQuery_clampsLimit() {
+        LocalDateTime now = LocalDateTime.parse("2026-06-13T10:00:00");
+
+        AdminQueryGuard.NormalizedQuery normalized =
+                controller.normalizeOperationalQuery(now.minusHours(1), now, 5000, now);
+
+        assertEquals(200, normalized.limit());
+    }
+
+    @Test
+    @DisplayName("operation query - 开始时间晚于结束时间时拒绝")
+    void normalizeOperationalQuery_rejectsStartAfterEnd() {
+        LocalDateTime now = LocalDateTime.parse("2026-06-13T10:00:00");
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> controller.normalizeOperationalQuery(now, now.minusSeconds(1), 10, now));
+
+        assertTrue(error.getMessage().contains("createTimeStart"));
+    }
+
+    @Test
+    @DisplayName("operation query - 时间范围超过最大窗口时拒绝")
+    void normalizeOperationalQuery_rejectsTooLargeWindow() {
+        LocalDateTime now = LocalDateTime.parse("2026-06-13T10:00:00");
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> controller.normalizeOperationalQuery(now.minusDays(31), now, 10, now));
+
+        assertTrue(error.getMessage().contains("max-window-days"));
+    }
+
+    @Test
+    @DisplayName("listRecentFailures - 归一化参数后查询 store")
+    void listRecentFailures_normalizesRequestAndCallsStore() {
+        LocalDateTime start = LocalDateTime.parse("2026-06-12T10:00:00");
+        LocalDateTime end = LocalDateTime.parse("2026-06-13T10:00:00");
+        List<TaskFailureVO> expected = List.of(new TaskFailureVO());
+        when(taskStore.listRecentFailures(any())).thenReturn(expected);
+
+        Result<List<TaskFailureVO>> result = controller.listRecentFailures(
+                "CREATE_SHIPMENT", "TimeoutException", start, end, 5000, "viewer");
+
+        ArgumentCaptor<TaskFailureQueryRequest> captor =
+                ArgumentCaptor.forClass(TaskFailureQueryRequest.class);
+        verify(taskStore).listRecentFailures(captor.capture());
+        TaskFailureQueryRequest request = captor.getValue();
+        assertEquals("CREATE_SHIPMENT", request.getTaskType());
+        assertEquals("TimeoutException", request.getErrorCode());
+        assertEquals(start, request.getCreateTimeStart());
+        assertEquals(end, request.getCreateTimeEnd());
+        assertEquals(200, request.getLimit());
+        assertSame(expected, result.getData());
+    }
+
+    @Test
+    @DisplayName("listRecentFailures - 非法时间范围返回 400")
+    void listRecentFailures_invalidTimeWindowReturnsBadRequest() {
+        LocalDateTime start = LocalDateTime.parse("2026-06-13T10:00:00");
+        LocalDateTime end = LocalDateTime.parse("2026-06-12T10:00:00");
+
+        Result<List<TaskFailureVO>> result = controller.listRecentFailures(
+                null, null, start, end, 10, "viewer");
+
+        assertEquals(400, result.getCode());
+        verify(taskStore, never()).listRecentFailures(any());
+    }
+
+    @Test
+    @DisplayName("listSlowTasks - 使用默认慢任务阈值并查询 store")
+    void listSlowTasks_usesDefaultThresholdAndCallsStore() {
+        LocalDateTime start = LocalDateTime.parse("2026-06-12T10:00:00");
+        LocalDateTime end = LocalDateTime.parse("2026-06-13T10:00:00");
+        List<SlowTaskVO> expected = List.of(new SlowTaskVO());
+        when(taskStore.listSlowTasks(any())).thenReturn(expected);
+
+        Result<List<SlowTaskVO>> result = controller.listSlowTasks(
+                "CREATE_SHIPMENT", null, start, end, 10, "viewer");
+
+        ArgumentCaptor<SlowTaskQueryRequest> captor =
+                ArgumentCaptor.forClass(SlowTaskQueryRequest.class);
+        verify(taskStore).listSlowTasks(captor.capture());
+        SlowTaskQueryRequest request = captor.getValue();
+        assertEquals("CREATE_SHIPMENT", request.getTaskType());
+        assertEquals(30_000L, request.getDurationMsGte());
+        assertEquals(start, request.getCreateTimeStart());
+        assertEquals(end, request.getCreateTimeEnd());
+        assertEquals(10, request.getLimit());
+        assertSame(expected, result.getData());
+    }
+
+    @Test
+    @DisplayName("listFailureTop - 默认 groupBy 和 limit")
+    void listFailureTop_usesDefaultGroupByAndLimit() {
+        LocalDateTime start = LocalDateTime.parse("2026-06-12T10:00:00");
+        LocalDateTime end = LocalDateTime.parse("2026-06-13T10:00:00");
+        List<FailureTopVO> expected = List.of(new FailureTopVO());
+        when(taskStore.listFailureTop(any())).thenReturn(expected);
+
+        Result<List<FailureTopVO>> result = controller.listFailureTop(
+                null, "CREATE_SHIPMENT", start, end, null, "viewer");
+
+        ArgumentCaptor<FailureTopQueryRequest> captor =
+                ArgumentCaptor.forClass(FailureTopQueryRequest.class);
+        verify(taskStore).listFailureTop(captor.capture());
+        FailureTopQueryRequest request = captor.getValue();
+        assertEquals("taskType,errorCode", request.getGroupBy());
+        assertEquals("CREATE_SHIPMENT", request.getTaskType());
+        assertEquals(20, request.getLimit());
+        assertEquals(start, request.getCreateTimeStart());
+        assertEquals(end, request.getCreateTimeEnd());
+        assertSame(expected, result.getData());
+    }
+
+    @Test
+    @DisplayName("listFailureTop - limit 最大裁剪到 100")
+    void listFailureTop_clampsLimitToFailureTopMax() {
+        LocalDateTime start = LocalDateTime.parse("2026-06-12T10:00:00");
+        LocalDateTime end = LocalDateTime.parse("2026-06-13T10:00:00");
+        when(taskStore.listFailureTop(any())).thenReturn(List.of());
+
+        controller.listFailureTop("errorCode", null, start, end, 5000, "viewer");
+
+        ArgumentCaptor<FailureTopQueryRequest> captor =
+                ArgumentCaptor.forClass(FailureTopQueryRequest.class);
+        verify(taskStore).listFailureTop(captor.capture());
+        assertEquals("errorCode", captor.getValue().getGroupBy());
+        assertEquals(100, captor.getValue().getLimit());
+    }
+
+    @Test
+    @DisplayName("listFailureTop - 非法 groupBy 返回 400")
+    void listFailureTop_invalidGroupByReturnsBadRequest() {
+        LocalDateTime start = LocalDateTime.parse("2026-06-12T10:00:00");
+        LocalDateTime end = LocalDateTime.parse("2026-06-13T10:00:00");
+
+        Result<List<FailureTopVO>> result = controller.listFailureTop(
+                "workerId", null, start, end, 10, "viewer");
+
+        assertEquals(400, result.getCode());
+        assertTrue(result.getMessage().contains("groupBy"));
+        verify(taskStore, never()).listFailureTop(any());
+    }
+
+    @Test
     @DisplayName("getTaskDetail - 不存在返回 404")
     void getTaskDetail_notFound_returns404() {
         when(taskStore.getTaskDetail(99L)).thenReturn(null);
@@ -111,6 +277,37 @@ class TaskAdminControllerTest {
         assertEquals(404, result.getCode());
         assertTrue(result.getMessage().contains("Task not found: 99"));
         assertNull(result.getData());
+    }
+
+    @Test
+    @DisplayName("getTaskTimeline - 存在任务返回生命周期")
+    void getTaskTimeline_existingTask_returnsTimeline() {
+        TaskDetailVO detail = new TaskDetailVO();
+        detail.setId(1L);
+        TaskTimelineItemVO item = new TaskTimelineItemVO();
+        item.setSource("SUBMITTED");
+        List<TaskTimelineItemVO> expected = List.of(item);
+        when(taskStore.getTaskDetail(1L)).thenReturn(detail);
+        when(taskStore.getTaskTimeline(1L)).thenReturn(expected);
+
+        Result<List<TaskTimelineItemVO>> result = controller.getTaskTimeline(1L, "viewer");
+
+        assertEquals(200, result.getCode());
+        assertSame(expected, result.getData());
+        verify(taskStore).getTaskTimeline(1L);
+    }
+
+    @Test
+    @DisplayName("getTaskTimeline - 任务不存在返回 404")
+    void getTaskTimeline_missingTask_returns404() {
+        when(taskStore.getTaskDetail(99L)).thenReturn(null);
+
+        Result<List<TaskTimelineItemVO>> result = controller.getTaskTimeline(99L, "viewer");
+
+        assertEquals(404, result.getCode());
+        assertTrue(result.getMessage().contains("Task not found: 99"));
+        assertNull(result.getData());
+        verify(taskStore, never()).getTaskTimeline(any());
     }
 
     @Test

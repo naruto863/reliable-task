@@ -213,8 +213,8 @@
     {
       "name": "reliable-task.admin.enabled",
       "type": "java.lang.Boolean",
-      "description": "Whether ReliableTask Admin REST APIs are registered. Write operations are controlled separately by reliable-task.admin.write-enabled.",
-      "defaultValue": true
+      "description": "Whether ReliableTask Admin REST APIs are registered. Disabled by default for safer production adoption; write operations are controlled separately by reliable-task.admin.write-enabled.",
+      "defaultValue": false
     },
     {
       "name": "reliable-task.admin.write-enabled",
@@ -247,6 +247,36 @@
       "defaultValue": 1000
     },
     {
+      "name": "reliable-task.admin.query.default-window-hours",
+      "type": "java.lang.Integer",
+      "description": "Default time window in hours for new operational Admin queries when no explicit time range is provided.",
+      "defaultValue": 24
+    },
+    {
+      "name": "reliable-task.admin.query.max-window-days",
+      "type": "java.lang.Integer",
+      "description": "Maximum allowed time window in days for new operational Admin queries.",
+      "defaultValue": 30
+    },
+    {
+      "name": "reliable-task.admin.query.default-limit",
+      "type": "java.lang.Integer",
+      "description": "Default row limit for new operational Admin queries when no limit is provided.",
+      "defaultValue": 50
+    },
+    {
+      "name": "reliable-task.admin.query.max-limit",
+      "type": "java.lang.Integer",
+      "description": "Maximum row limit for new operational Admin queries. Values above the hard safety cap are clamped by Admin query protection.",
+      "defaultValue": 200
+    },
+    {
+      "name": "reliable-task.admin.query.slow-threshold-ms",
+      "type": "java.lang.Long",
+      "description": "Default slow task threshold in milliseconds for the slow-task operational query.",
+      "defaultValue": 30000
+    },
+    {
       "name": "reliable-task.admin.audit.enabled",
       "type": "java.lang.Boolean",
       "description": "Whether Admin operation audit logging is enabled.",
@@ -255,8 +285,8 @@
     {
       "name": "reliable-task.admin.auth.enabled",
       "type": "java.lang.Boolean",
-      "description": "Whether Admin authorization checks are enabled.",
-      "defaultValue": false
+      "description": "Whether Admin authorization checks are enabled. Enabled by default when Admin APIs are explicitly registered.",
+      "defaultValue": true
     },
     {
       "name": "reliable-task.admin.batch.enabled",

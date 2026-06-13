@@ -3,10 +3,13 @@ package com.reliabletask.starter.autoconfigure;
 import com.reliabletask.core.spi.AlarmNotifier;
 import com.reliabletask.core.enums.RetryStrategyType;
 import com.reliabletask.core.classifier.DefaultFailureClassifier;
+import com.reliabletask.core.deadletter.TaskDeadLetterDispatcher;
 import com.reliabletask.core.event.TaskEventPublisher;
+import com.reliabletask.core.model.DeadLetterContext;
 import com.reliabletask.core.model.FailureDecision;
 import com.reliabletask.core.spi.FailureClassifier;
 import com.reliabletask.core.spi.RetryStrategy;
+import com.reliabletask.core.spi.TaskDeadLetterHandler;
 import com.reliabletask.core.spi.TaskEventListener;
 import com.reliabletask.core.spi.TaskStore;
 import com.reliabletask.core.spi.TaskTemplate;
@@ -17,6 +20,7 @@ import com.reliabletask.core.spi.TaskPayloadSerializer;
 import com.reliabletask.core.spi.WorkerHeartbeatReporter;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.spi.noop.NoopTaskAuditRecorder;
+import com.reliabletask.core.spi.noop.NoopTaskDeadLetterHandler;
 import com.reliabletask.core.spi.noop.NoopTaskMetricsRecorder;
 import com.reliabletask.core.spi.noop.NoopWorkerHeartbeatReporter;
 import com.reliabletask.core.spi.noop.NoopAlarmNotifier;
@@ -78,6 +82,8 @@ class ReliableTaskExecutorAutoConfigurationTest {
             assertThat(context).hasSingleBean(AlarmNotifier.class);
             assertThat(context).hasSingleBean(TaskAlertService.class);
             assertThat(context).hasSingleBean(FailureClassifier.class);
+            assertThat(context).hasSingleBean(TaskDeadLetterHandler.class);
+            assertThat(context).hasSingleBean(TaskDeadLetterDispatcher.class);
             assertThat(context).hasSingleBean(RetryProperties.class);
             assertThat(context).hasSingleBean(RetryStrategyRegistry.class);
             assertThat(context).hasSingleBean(TaskEventPublisher.class);
@@ -96,6 +102,8 @@ class ReliableTaskExecutorAutoConfigurationTest {
                     .isInstanceOf(NoopTaskAlertService.class);
             assertThat(context).getBean(FailureClassifier.class)
                     .isInstanceOf(DefaultFailureClassifier.class);
+            assertThat(context).getBean(TaskDeadLetterHandler.class)
+                    .isInstanceOf(NoopTaskDeadLetterHandler.class);
             assertThat(context).getBean(RetryStrategyRegistry.class)
                     .satisfies(registry -> assertThat(registry.getStrategy(RetryStrategyType.EXPONENTIAL))
                             .isNotNull());
@@ -209,6 +217,27 @@ class ReliableTaskExecutorAutoConfigurationTest {
     }
 
     @Test
+    @DisplayName("自定义 TaskDeadLetterHandler Bean 会注册到死信分发器")
+    void customTaskDeadLetterHandlerBean_isRegisteredInDispatcher() {
+        contextRunner
+                .withUserConfiguration(CustomTaskDeadLetterHandlerConfiguration.class)
+                .run(context -> {
+                    RecordingTaskDeadLetterHandler handler =
+                            context.getBean(RecordingTaskDeadLetterHandler.class);
+
+                    context.getBean(TaskDeadLetterDispatcher.class)
+                            .dispatch(DeadLetterContext.builder()
+                                    .task(TaskInstance.builder().id(1L).build())
+                                    .source("test")
+                                    .build());
+
+                    assertThat(context).doesNotHaveBean(NoopTaskDeadLetterHandler.class);
+                    assertThat(handler.contexts).hasSize(1);
+                    assertThat(handler.contexts.get(0).getTask().getId()).isEqualTo(1L);
+                });
+    }
+
+    @Test
     @DisplayName("metrics 启用且存在 MeterRegistry 时装配 Micrometer recorder")
     void metricsEnabledWithMeterRegistry_registersMicrometerRecorder() {
         contextRunner
@@ -301,6 +330,7 @@ class ReliableTaskExecutorAutoConfigurationTest {
             assertThat(properties.getRetry().getMinDelayMs()).isEqualTo(0L);
             assertThat(properties.getRetry().getMaxDelayMs()).isEqualTo(300000L);
             assertThat(properties.getSerializer().getType()).isEqualTo("JACKSON");
+            assertThat(properties.getStore().getTablePrefix()).isEmpty();
             assertThat(properties.getWorker().getBackpressure().isEnabled()).isFalse();
             assertThat(properties.getWorker().getMaxBatchSize()).isEqualTo(1000);
             assertThat(properties.getWorker().getBackpressure().getMinFetchSize()).isEqualTo(1);
@@ -309,7 +339,15 @@ class ReliableTaskExecutorAutoConfigurationTest {
             assertThat(properties.getWorker().getHeartbeat().getIntervalMs()).isEqualTo(10000L);
             assertThat(properties.getWorker().getHeartbeat().getLockRenewalTtlSeconds()).isEqualTo(300L);
             assertThat(properties.getWorker().getHeartbeat().getStaleWorkerThresholdSeconds()).isEqualTo(60L);
+            assertThat(properties.getAdmin().isEnabled()).isFalse();
             assertThat(properties.getAdmin().isWriteEnabled()).isFalse();
+            assertThat(properties.getAdmin().getPort()).isEqualTo(9090);
+            assertThat(properties.getAdmin().getContextPath()).isEqualTo("/reliable-task");
+            assertThat(properties.getAdmin().getQuery().getDefaultWindowHours()).isEqualTo(24);
+            assertThat(properties.getAdmin().getQuery().getMaxWindowDays()).isEqualTo(30);
+            assertThat(properties.getAdmin().getQuery().getDefaultLimit()).isEqualTo(50);
+            assertThat(properties.getAdmin().getQuery().getMaxLimit()).isEqualTo(200);
+            assertThat(properties.getAdmin().getQuery().getSlowThresholdMs()).isEqualTo(30_000L);
             assertThat(properties.getAdmin().getAudit().isEnabled()).isFalse();
             assertThat(properties.getAdmin().getAuth().isEnabled()).isTrue();
             assertThat(properties.getAdmin().getBatch().isEnabled()).isFalse();
@@ -334,6 +372,7 @@ class ReliableTaskExecutorAutoConfigurationTest {
                         "reliable-task.retry.min-delay-ms=250",
                         "reliable-task.retry.max-delay-ms=120000",
                         "reliable-task.serializer.type=CUSTOM",
+                        "reliable-task.store.table-prefix=rt_",
                         "reliable-task.worker.backpressure.enabled=true",
                         "reliable-task.worker.max-batch-size=250",
                         "reliable-task.worker.backpressure.min-fetch-size=2",
@@ -345,9 +384,17 @@ class ReliableTaskExecutorAutoConfigurationTest {
                         "reliable-task.recovery.interval-ms=15000",
                         "reliable-task.recovery.timeout-seconds=90",
                         "reliable-task.recovery.max-reset-per-scan=25",
+                        "reliable-task.admin.enabled=true",
                         "reliable-task.admin.write-enabled=true",
+                        "reliable-task.admin.port=9191",
+                        "reliable-task.admin.context-path=/ops/reliable-task",
                         "reliable-task.admin.max-page-size=120",
                         "reliable-task.admin.max-batch-limit=400",
+                        "reliable-task.admin.query.default-window-hours=12",
+                        "reliable-task.admin.query.max-window-days=14",
+                        "reliable-task.admin.query.default-limit=25",
+                        "reliable-task.admin.query.max-limit=80",
+                        "reliable-task.admin.query.slow-threshold-ms=45000",
                         "reliable-task.admin.audit.enabled=true",
                         "reliable-task.admin.auth.enabled=true",
                         "reliable-task.admin.batch.enabled=true"
@@ -368,6 +415,7 @@ class ReliableTaskExecutorAutoConfigurationTest {
                     assertThat(properties.getRetry().getMinDelayMs()).isEqualTo(250L);
                     assertThat(properties.getRetry().getMaxDelayMs()).isEqualTo(120000L);
                     assertThat(properties.getSerializer().getType()).isEqualTo("CUSTOM");
+                    assertThat(properties.getStore().getTablePrefix()).isEqualTo("rt_");
                     assertThat(properties.getWorker().getBackpressure().isEnabled()).isTrue();
                     assertThat(properties.getWorker().getMaxBatchSize()).isEqualTo(250);
                     assertThat(properties.getWorker().getBackpressure().getMinFetchSize()).isEqualTo(2);
@@ -379,10 +427,18 @@ class ReliableTaskExecutorAutoConfigurationTest {
                     assertThat(properties.getRecovery().getIntervalMs()).isEqualTo(15000L);
                     assertThat(properties.getRecovery().getTimeoutSeconds()).isEqualTo(90L);
                     assertThat(properties.getRecovery().getMaxResetPerScan()).isEqualTo(25);
-            assertThat(properties.getAdmin().getMaxPageSize()).isEqualTo(120);
-            assertThat(properties.getAdmin().getMaxBatchLimit()).isEqualTo(400);
-            assertThat(properties.getAdmin().isWriteEnabled()).isTrue();
-            assertThat(properties.getAdmin().getAudit().isEnabled()).isTrue();
+                    assertThat(properties.getAdmin().isEnabled()).isTrue();
+                    assertThat(properties.getAdmin().isWriteEnabled()).isTrue();
+                    assertThat(properties.getAdmin().getPort()).isEqualTo(9191);
+                    assertThat(properties.getAdmin().getContextPath()).isEqualTo("/ops/reliable-task");
+                    assertThat(properties.getAdmin().getMaxPageSize()).isEqualTo(120);
+                    assertThat(properties.getAdmin().getMaxBatchLimit()).isEqualTo(400);
+                    assertThat(properties.getAdmin().getQuery().getDefaultWindowHours()).isEqualTo(12);
+                    assertThat(properties.getAdmin().getQuery().getMaxWindowDays()).isEqualTo(14);
+                    assertThat(properties.getAdmin().getQuery().getDefaultLimit()).isEqualTo(25);
+                    assertThat(properties.getAdmin().getQuery().getMaxLimit()).isEqualTo(80);
+                    assertThat(properties.getAdmin().getQuery().getSlowThresholdMs()).isEqualTo(45_000L);
+                    assertThat(properties.getAdmin().getAudit().isEnabled()).isTrue();
                     assertThat(properties.getAdmin().getAuth().isEnabled()).isTrue();
                     assertThat(properties.getAdmin().getBatch().isEnabled()).isTrue();
                 });
@@ -440,6 +496,14 @@ class ReliableTaskExecutorAutoConfigurationTest {
         }
     }
 
+    @Configuration(proxyBeanMethods = false)
+    static class CustomTaskDeadLetterHandlerConfiguration {
+        @Bean
+        RecordingTaskDeadLetterHandler recordingTaskDeadLetterHandler() {
+            return new RecordingTaskDeadLetterHandler();
+        }
+    }
+
     static class CustomRetryStrategy implements RetryStrategy {
         @Override
         public RetryStrategyType getType() {
@@ -458,6 +522,15 @@ class ReliableTaskExecutorAutoConfigurationTest {
         @Override
         public void onEvent(com.reliabletask.core.model.TaskEvent event) {
             events.add(event);
+        }
+    }
+
+    static class RecordingTaskDeadLetterHandler implements TaskDeadLetterHandler {
+        private final java.util.List<DeadLetterContext> contexts = new java.util.ArrayList<>();
+
+        @Override
+        public void handle(DeadLetterContext context) {
+            contexts.add(context);
         }
     }
 

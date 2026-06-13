@@ -1,0 +1,70 @@
+# Example Prometheus rules for ReliableTask.
+# Thresholds are placeholders for production adoption reviews. Tune them per service.
+# These rules assume reliable-task.metrics.enabled=true and a Prometheus Micrometer registry.
+
+groups:
+  - name: reliable-task.example
+    rules:
+      - alert: ReliableTaskBacklogOldestPendingHigh
+        expr: sum(reliable_task_backlog_total) > 1000 and max(reliable_task_oldest_pending_age_seconds) > 300
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: ReliableTask backlog and oldest pending age are high
+          description: Backlog is above the example threshold and the oldest pending task is older than 5 minutes. Check worker capacity, stale workers, slow tasks, and recent failures.
+          runbook: docs/operations/reliable-task-runbook.md#backlog-growth
+
+      - alert: ReliableTaskBacklogWithoutWorkerCapacity
+        expr: sum(reliable_task_backlog_total) > 0 and sum(reliable_task_worker_available_capacity) <= 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: ReliableTask has backlog but no available worker capacity
+          description: Pending work exists while worker available capacity is zero. Check executor saturation, handler latency, and worker process health.
+          runbook: docs/operations/reliable-task-runbook.md#backlog-growth
+
+      - alert: ReliableTaskRetryStorm
+        expr: sum(rate(reliable_task_retry_total[5m])) > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: ReliableTask retry rate is above the example threshold
+          description: Retry rate is elevated. Check failure top, recent failures, retry policy, FailureClassifier decisions, and external dependencies.
+          runbook: docs/operations/reliable-task-runbook.md#retry-storm
+
+      - alert: ReliableTaskDeadRateHigh
+        expr: sum(rate(reliable_task_failed_total{status="DEAD"}[5m])) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: ReliableTask terminal dead rate is above the example threshold
+          description: Tasks are entering DEAD state. Check recent failures, failure top, task logs, timeline, and dead-letter handler output before requeueing.
+          runbook: docs/operations/reliable-task-runbook.md#dead-task-spike
+
+      - alert: ReliableTaskDeadTotalHigh
+        expr: sum(reliable_task_dead_total) > 100
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: ReliableTask dead task total is above the example threshold
+          description: Current DEAD task count is high. Review retention, dead-letter handling, and whether affected tasks need bounded remediation.
+          runbook: docs/operations/reliable-task-runbook.md#dead-task-spike
+
+      - alert: ReliableTaskRecoveryRateHigh
+        expr: sum(rate(reliable_task_recovered_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: ReliableTask recovery rate is above the example threshold
+          description: Timeout recovery is elevated. Check stale workers, handler timeout, lock TTL, executor saturation, and long external calls.
+          runbook: docs/operations/reliable-task-runbook.md#recovery-count-increase
+
+# Stale workers do not have a built-in Prometheus metric in the current v0.5 scope.
+# Monitor them through Admin GET /api/reliable-task/workers/stale or an external probe
+# that calls the Admin API through the service's approved authentication path.
