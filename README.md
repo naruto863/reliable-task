@@ -12,7 +12,7 @@ recovers timed-out executions, and exposes admin APIs for operational visibility
 [![CI](https://github.com/naruto863/reliable-task/actions/workflows/ci.yml/badge.svg)](https://github.com/naruto863/reliable-task/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-> ReliableTask is currently on preview release `v0.3.0`. APIs, configuration, and database schema may evolve before `v1.0.0`.
+> ReliableTask is currently on preview release `v0.5.0`. APIs, configuration, and database schema may evolve before `v1.0.0`.
 
 ## Table of Contents
 
@@ -215,7 +215,7 @@ More demo requests are documented in [reliable-task-demo/README.md](reliable-tas
 
 ## Installation
 
-ReliableTask `0.3.0` is not published to Maven Central yet. For this preview release, use a source build, local Maven installation, or a private Maven repository.
+ReliableTask `0.5.0` is not published to Maven Central yet. For this preview release, use a source build, local Maven installation, or a private Maven repository.
 
 ```bash
 mvn -B -DskipTests install
@@ -227,7 +227,7 @@ Then depend on the Spring Boot starter:
 <dependency>
     <groupId>com.reliabletask</groupId>
     <artifactId>reliable-task-spring-boot-starter</artifactId>
-    <version>0.3.0</version>
+    <version>0.5.0</version>
 </dependency>
 ```
 
@@ -437,7 +437,7 @@ slow tasks, failure aggregation, and timeline-related list views. Existing `/tas
 `/audit-logs` list APIs keep their compatible filtering behavior and do not receive an
 implicit 24-hour time window.
 
-Reserved compatibility properties are still bindable but are not wired to behavior in `0.3.0`: `reliable-task.serializer.type` does not switch serializers, so provide a `TaskPayloadSerializer` bean instead; `reliable-task.store.table-prefix` does not change MyBatis table names; `reliable-task.admin.port` and `reliable-task.admin.context-path` do not create a separate management server or change the current `/api/reliable-task` mapping.
+Reserved compatibility properties are still bindable but are not wired to behavior in `0.5.0`: `reliable-task.serializer.type` does not switch serializers, so provide a `TaskPayloadSerializer` bean instead; `reliable-task.store.table-prefix` does not change MyBatis table names; `reliable-task.admin.port` and `reliable-task.admin.context-path` do not create a separate management server or change the current `/api/reliable-task` mapping.
 
 See [application-example.yml](reliable-task-demo/src/main/resources/application-example.yml) for a runnable demo configuration. It is a local opt-in example, not a production default profile.
 
@@ -551,10 +551,10 @@ Breaking changes, security fixes, and migration notes should be recorded in [CHA
 ## Release
 
 - Versioning follows SemVer.
-- Git tags use `vX.Y.Z`, for example `v0.3.0`.
+- Git tags use `vX.Y.Z`, for example `v0.5.0`.
 - Release notes are maintained in [CHANGELOG.md](CHANGELOG.md) and [docs/releases](docs/releases).
 - The release process is documented in [docs/release-process.md](docs/release-process.md).
-- The latest preview release is `v0.3.0`.
+- The latest preview release is `v0.5.0`.
 
 ## Contributing
 

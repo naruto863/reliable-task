@@ -6,16 +6,18 @@ This project follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-13
+
 ### Added
 
-- Add the v0.5 production operations scope and acceptance baseline in `docs/review/RELIABLE_TASK_V05_SCOPE.md`.
+- Define the v0.5 production operations scope and acceptance baseline.
 - Add bounded Admin read APIs for recent failed executions and slow execution records.
 - Add bounded Admin failure-top aggregation API by task type and error code.
 - Add lightweight Admin task lifecycle timeline API based on task rows, execution logs, and audit logs.
 - Add `TaskDeadLetterHandler` SPI, no-op default handler, and dead-letter dispatcher auto-configuration.
 - Wire dead-letter dispatch into no-handler and RetryEngine DEAD paths after successful DEAD state writes.
 - Add production monitoring, Prometheus alert examples, and incident runbook documentation under `docs/operations`.
-- Add the v0.5 readiness report in `docs/review/RELIABLE_TASK_V05_READINESS_REPORT.md`.
+- Record v0.5 readiness findings for release preparation.
 
 ### Changed
 
@@ -23,6 +25,7 @@ This project follows Semantic Versioning.
 - Clarify reserved configuration keys for serializer type, store table prefix, Admin port, and Admin context path.
 - Add Admin operational query guard configuration for default time windows, maximum windows, default limits, maximum limits, and slow-task thresholds without changing existing `/tasks` and `/audit-logs` list behavior.
 - Expand production adoption, demo, and release-process documentation for v0.5 operational queries, dead-letter SPI, runbooks, Admin safety, payload sensitivity, alert thresholds, MySQL validation profiles, and recovery readiness.
+- Change project release version to `0.5.0`.
 
 ### Planned
 
@@ -83,6 +86,7 @@ This project follows Semantic Versioning.
 - Document that Admin APIs require authentication, authorization, audit logging, and network access controls before production use.
 - Keep real local configuration out of version control and use placeholder values in example configuration.
 
-[Unreleased]: https://github.com/naruto863/reliable-task/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/naruto863/reliable-task/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/naruto863/reliable-task/compare/v0.3.0...v0.5.0
 [0.3.0]: https://github.com/naruto863/reliable-task/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/naruto863/reliable-task/releases/tag/v0.1.0
