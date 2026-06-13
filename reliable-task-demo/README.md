@@ -10,7 +10,7 @@ Demo 覆盖：
 - Admin API 查询任务、统计、Worker 状态。
 - Micrometer 指标查询。
 
-Demo 只演示 ReliableTask 的投递、执行、重试和管理 API。生产环境仍必须按 at-least-once 语义设计 Handler：同一个业务动作可能因为重试、超时恢复或人工重新入队被执行多次，外部系统调用需要业务方自行保证幂等。
+Demo 只演示 ReliableTask 的投递、执行、重试和管理 API。它显式引入 `reliable-task-admin-spring-boot-starter` 才启用 Admin REST 自动装配；只引入 worker starter 的应用不会默认创建 Admin controller。生产环境仍必须按 at-least-once 语义设计 Handler：同一个业务动作可能因为重试、超时恢复或人工重新入队被执行多次，外部系统调用需要业务方自行保证幂等。
 
 ## 前置条件
 

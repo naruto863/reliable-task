@@ -1,11 +1,12 @@
 package com.reliabletask.core.spi;
 
 /**
- * 任务序列化器 SPI
+ * 旧任务序列化器 SPI。
  *
- * <p>负责 TaskInstance 中 payload 字段的序列化与反序列化。
- * 默认实现基于 JSON（Jackson），业务方可替换为其他序列化方案
- * （如 Protobuf、Kryo 等）以实现更高的性能或更小的存储体积。
+ * <p>该接口在早期版本中用于 TaskInstance payload 字段的序列化与反序列化。
+ * v0.6 起仅作为源码兼容接口保留，不再新增能力。新代码请优先实现
+ * {@link TaskPayloadSerializer}；后续需要上下文感知的压缩、加密、脱敏等能力时，
+ * 将通过 TaskPayloadCodec 扩展。
  *
  * <p>序列化范围:
  * <ul>
@@ -13,7 +14,10 @@ package com.reliabletask.core.spi;
  *   <li>payload 在投递时序列化后存入数据库</li>
  *   <li>payload 在执行时从数据库反序列化后传给 Handler</li>
  * </ul>
+ *
+ * @deprecated since 0.6.0, use {@link TaskPayloadSerializer} for new integrations.
  */
+@Deprecated(since = "0.6.0", forRemoval = false)
 public interface TaskSerializer {
 
     /**

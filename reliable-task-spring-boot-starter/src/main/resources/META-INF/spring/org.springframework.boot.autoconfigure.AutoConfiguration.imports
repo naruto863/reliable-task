@@ -1,4 +1,3 @@
 com.reliabletask.starter.autoconfigure.ReliableTaskAutoConfiguration
 com.reliabletask.starter.autoconfigure.ReliableTaskStoreAutoConfiguration
 com.reliabletask.starter.autoconfigure.ReliableTaskExecutorAutoConfiguration
-com.reliabletask.starter.autoconfigure.ReliableTaskAdminAutoConfiguration

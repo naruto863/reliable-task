@@ -12,7 +12,7 @@ recovers timed-out executions, and exposes admin APIs for operational visibility
 [![CI](https://github.com/naruto863/reliable-task/actions/workflows/ci.yml/badge.svg)](https://github.com/naruto863/reliable-task/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-> ReliableTask is currently on preview release `v0.5.0`. APIs, configuration, and database schema may evolve before `v1.0.0`.
+> ReliableTask is currently on preview release `v0.6.0`. APIs, configuration, and database schema may evolve before `v1.0.0`.
 
 ## Table of Contents
 
@@ -87,7 +87,8 @@ ReliableTask is not a good fit when:
 | Task event listeners | Observe lightweight state-change events such as submitted, started, succeeded, retry scheduled, dead, cancelled, requeued, and recovered. |
 | Dead-letter handler SPI | Register `TaskDeadLetterHandler` beans for post-DEAD notification, archive, or compensation flows; the default handler is no-op. |
 | Admin APIs | Query tasks, v0.5 operational views, logs and stats, retry, requeue, cancel, update payloads, and inspect workers. |
-| Spring Boot starter | Enable store, executor, admin APIs, metrics, serializer, idempotency, and worker settings through auto-configuration. |
+| Worker Spring Boot starter | Enable store, executor, metrics, serializer, idempotency, and worker settings through auto-configuration. |
+| Admin Spring Boot starter | Opt in to Admin REST APIs and web dependencies explicitly. |
 
 ## Architecture
 
@@ -100,10 +101,10 @@ flowchart LR
     E --> F["Business TaskHandler"]
     E --> G["metrics / alerts / logs / events"]
     D --> H["reliable-task-admin<br/>query / retry / cancel / operations"]
-    I["reliable-task-spring-boot-starter"] --> B
+    I["reliable-task-spring-boot-starter<br/>worker-only"] --> B
     I --> D
     I --> E
-    I --> H
+    J["reliable-task-admin-spring-boot-starter"] --> H
 ```
 
 Execution flow:
@@ -141,7 +142,8 @@ Production handlers should therefore be idempotent. Recommended patterns include
 | `reliable-task-store` | MyBatis-Plus storage implementation and MySQL schema. |
 | `reliable-task-executor` | Worker scheduling, task execution, retry, recovery, serialization, heartbeat, and thread pool management. |
 | `reliable-task-admin` | Management REST APIs and metrics collection. |
-| `reliable-task-spring-boot-starter` | Spring Boot auto-configuration and configuration metadata. |
+| `reliable-task-spring-boot-starter` | Worker-only Spring Boot auto-configuration and configuration metadata. |
+| `reliable-task-admin-spring-boot-starter` | Admin REST auto-configuration and web dependencies for applications that explicitly opt in. |
 | `reliable-task-demo` | Runnable demo application and local cURL scripts. |
 
 ## Requirements
@@ -174,6 +176,14 @@ CREATE DATABASE reliable_task DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unic
 ```bash
 mysql -u reliable_task_user -p reliable_task < reliable-task-store/src/main/resources/db/schema.sql
 ```
+
+For migration-managed applications, use one initialization path only:
+
+- Plain SQL: `reliable-task-store/src/main/resources/db/schema.sql`
+- Flyway: `classpath:db/migration/V1__init_reliable_task_schema.sql`
+- Liquibase: `classpath:db/changelog/db.changelog-master.yaml`
+
+Do not run these initialization paths together against the same database, because they create the same ReliableTask tables and indexes.
 
 ### 3. Prepare local demo configuration
 
@@ -215,19 +225,29 @@ More demo requests are documented in [reliable-task-demo/README.md](reliable-tas
 
 ## Installation
 
-ReliableTask `0.5.0` is not published to Maven Central yet. For this preview release, use a source build, local Maven installation, or a private Maven repository.
+ReliableTask `0.6.0` is not published to Maven Central yet. For this preview release, use a source build, local Maven installation, or a private Maven repository.
 
 ```bash
 mvn -B -DskipTests install
 ```
 
-Then depend on the Spring Boot starter:
+For a worker-only application, depend on the Spring Boot starter:
 
 ```xml
 <dependency>
     <groupId>com.reliabletask</groupId>
     <artifactId>reliable-task-spring-boot-starter</artifactId>
-    <version>0.5.0</version>
+    <version>0.6.0</version>
+</dependency>
+```
+
+If the application also needs Admin REST APIs, add the Admin starter explicitly:
+
+```xml
+<dependency>
+    <groupId>com.reliabletask</groupId>
+    <artifactId>reliable-task-admin-spring-boot-starter</artifactId>
+    <version>0.6.0</version>
 </dependency>
 ```
 
@@ -277,6 +297,8 @@ reliable-task:
 
 The runnable demo explicitly opts in to Admin APIs with `admin.enabled=true`, `write-enabled=true`,
 and `auth.enabled=false` for local exploration. Those demo settings are not production defaults.
+Admin REST APIs require the `reliable-task-admin-spring-boot-starter` dependency in addition to
+`reliable-task.admin.enabled=true`.
 
 ### Implement a TaskHandler
 
@@ -437,7 +459,34 @@ slow tasks, failure aggregation, and timeline-related list views. Existing `/tas
 `/audit-logs` list APIs keep their compatible filtering behavior and do not receive an
 implicit 24-hour time window.
 
-Reserved compatibility properties are still bindable but are not wired to behavior in `0.5.0`: `reliable-task.serializer.type` does not switch serializers, so provide a `TaskPayloadSerializer` bean instead; `reliable-task.store.table-prefix` does not change MyBatis table names; `reliable-task.admin.port` and `reliable-task.admin.context-path` do not create a separate management server or change the current `/api/reliable-task` mapping.
+Reserved compatibility properties are still bindable but are not wired to behavior in `0.6.0`: `reliable-task.serializer.type` does not switch serializers, so provide a `TaskPayloadSerializer` bean instead; `reliable-task.store.table-prefix` does not change MyBatis table names; `reliable-task.admin.port` and `reliable-task.admin.context-path` do not create a separate management server or change the current `/api/reliable-task` mapping.
+
+For v0.6 integrations, storage extensions should depend on the narrowest Store SPI they need: `TaskCommandStore` for submit/claim/state changes, `TaskQueryStore` for read-only Admin/metrics/alert queries, and `TaskOperationsStore` for operational actions such as heartbeat and Admin writes. The old `TaskStore` remains as a compatibility facade that extends the narrower interfaces.
+
+For v0.6 integrations, `TaskSerializer` is retained only as a deprecated source-compatible SPI. New custom payload serialization should provide a `TaskPayloadSerializer` bean; context-aware codec capabilities are reserved for the upcoming `TaskPayloadCodec` path.
+
+To customize payload handling with task context in v0.6, provide a `TaskPayloadCodec` bean. When no codec bean is present, the starter adapts the active `TaskPayloadSerializer` bean:
+
+```java
+@Bean
+TaskPayloadCodec taskPayloadCodec() {
+    return new TaskPayloadCodec() {
+        public String encode(Object payload, TaskPayloadCodecContext context) {
+            return serializeWithContext(payload, context.getTaskType(), context.getTenantId());
+        }
+
+        public <T> T decode(String payload, Class<T> targetType, TaskPayloadCodecContext context) {
+            return deserializeWithContext(payload, targetType, context.getTaskType(), context.getTenantId());
+        }
+    };
+}
+```
+
+Task submission also uses `TaskTraceIdGenerator`: the default generator reuses `TraceContext` when present, otherwise it writes an `rt-` prefixed traceId that fits the existing `VARCHAR(64)` column. Provide your own `TaskTraceIdGenerator` bean to replace that policy.
+
+Task execution now uses an ordered `TaskInterceptor` chain. Register `TaskInterceptor` beans and, when ordering matters, use Spring `@Order`; the built-in trace interceptor keeps trace cleanup behavior compatible with v0.5.
+
+Handler registration uses `TaskNameResolver` and records `TaskHandlerMetadata` in the registry. The default resolver preserves the existing rule that `@TaskHandler` and `getTaskType()` must match when both are present; custom resolvers can replace naming policy, but duplicate taskType detection still happens in the registry.
 
 See [application-example.yml](reliable-task-demo/src/main/resources/application-example.yml) for a runnable demo configuration. It is a local opt-in example, not a production default profile.
 
@@ -551,10 +600,10 @@ Breaking changes, security fixes, and migration notes should be recorded in [CHA
 ## Release
 
 - Versioning follows SemVer.
-- Git tags use `vX.Y.Z`, for example `v0.5.0`.
+- Git tags use `vX.Y.Z`, for example `v0.6.0`.
 - Release notes are maintained in [CHANGELOG.md](CHANGELOG.md) and [docs/releases](docs/releases).
 - The release process is documented in [docs/release-process.md](docs/release-process.md).
-- The latest preview release is `v0.5.0`.
+- The latest preview release is `v0.6.0`.
 
 ## Contributing
 

@@ -1,9 +1,13 @@
 package com.reliabletask.executor.handler;
 
+import com.reliabletask.core.model.TaskHandlerMetadata;
 import com.reliabletask.core.spi.TaskHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -18,6 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class TaskHandlerRegistry {
 
     private final Map<String, TaskHandler> registry = new ConcurrentHashMap<>();
+    private final Map<String, TaskHandlerMetadata> metadataRegistry = new ConcurrentHashMap<>();
 
     /**
      * 根据任务类型获取对应的 Handler
@@ -42,24 +47,73 @@ public class TaskHandlerRegistry {
     }
 
     /**
+     * 获取指定任务类型的 Handler 元数据。
+     *
+     * @param taskType 任务类型
+     * @return Handler 元数据
+     * @throws IllegalArgumentException 如果未找到对应元数据
+     */
+    public TaskHandlerMetadata getMetadata(String taskType) {
+        TaskHandlerMetadata metadata = metadataRegistry.get(taskType);
+        if (metadata == null) {
+            throw new IllegalArgumentException("No TaskHandler metadata registered for taskType: " + taskType);
+        }
+        return metadata;
+    }
+
+    /**
+     * 获取所有已注册 Handler 元数据快照。
+     */
+    public Map<String, TaskHandlerMetadata> getAllMetadata() {
+        return Collections.unmodifiableMap(new LinkedHashMap<>(metadataRegistry));
+    }
+
+    /**
      * 手动注册 Handler（用于测试）
      */
     void registerHandler(TaskHandler handler) {
-        String taskType = handler.getTaskType();
+        registerHandler(handler.getTaskType(), handler, handler.getClass(), null);
+    }
+
+    /**
+     * 使用已解析 taskType 注册 Handler。
+     */
+    void registerHandler(String taskType, TaskHandler handler, Class<?> handlerClass, String description) {
+        validateTaskType(taskType, handlerClass);
         TaskHandler existing = registry.putIfAbsent(taskType, handler);
         if (existing == null) {
+            metadataRegistry.put(taskType, buildMetadata(taskType, handler, handlerClass, description));
             log.info("Registered TaskHandler: type={}, class={}",
-                    taskType, handler.getClass().getSimpleName());
+                    taskType, handlerClass.getSimpleName());
             return;
         }
         if (existing == handler) {
             log.debug("TaskHandler already registered: type={}, class={}",
-                    taskType, handler.getClass().getSimpleName());
+                    taskType, handlerClass.getSimpleName());
             return;
         }
         throw new IllegalStateException(
                 "Duplicate TaskHandler for taskType: " + taskType
                         + ", existing=" + existing.getClass().getName()
                         + ", new=" + handler.getClass().getName());
+    }
+
+    private void validateTaskType(String taskType, Class<?> handlerClass) {
+        if (!StringUtils.hasText(taskType)) {
+            throw new IllegalStateException("TaskHandler taskType must not be blank: class="
+                    + handlerClass.getName());
+        }
+    }
+
+    private TaskHandlerMetadata buildMetadata(String taskType, TaskHandler handler,
+                                              Class<?> handlerClass, String description) {
+        return TaskHandlerMetadata.builder()
+                .taskType(taskType)
+                .handlerClassName(handlerClass.getName())
+                .payloadType(handler.payloadType())
+                .maxConcurrency(handler.maxConcurrency())
+                .timeoutMs(handler.timeoutMs())
+                .description(description)
+                .build();
     }
 }

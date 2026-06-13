@@ -21,7 +21,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-@DisplayName("ReliableTaskAdminAutoConfiguration 测试")
+@DisplayName("ReliableTask Admin starter 自动配置测试")
 class ReliableTaskAdminAutoConfigurationTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()

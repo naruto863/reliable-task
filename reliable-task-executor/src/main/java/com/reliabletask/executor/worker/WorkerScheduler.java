@@ -6,7 +6,8 @@ import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.model.TaskEvent;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.WorkerHeartbeat;
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskCommandStore;
+import com.reliabletask.core.spi.TaskOperationsStore;
 import com.reliabletask.executor.handler.TaskExecutor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -36,18 +37,28 @@ import java.util.List;
 @Slf4j
 public class WorkerScheduler {
 
-    private final TaskStore taskStore;
+    private final TaskCommandStore taskCommandStore;
+    private final TaskOperationsStore taskOperationsStore;
     private final WorkerProperties properties;
     private final TaskExecutor taskExecutor;
     private final TaskEventPublisher eventPublisher;
 
-    public WorkerScheduler(TaskStore taskStore, WorkerProperties properties, TaskExecutor taskExecutor) {
+    public WorkerScheduler(TaskCommandStore taskStore, WorkerProperties properties, TaskExecutor taskExecutor) {
         this(taskStore, properties, taskExecutor, new TaskEventPublisher());
     }
 
-    public WorkerScheduler(TaskStore taskStore, WorkerProperties properties,
+    public WorkerScheduler(TaskCommandStore taskStore, WorkerProperties properties,
                            TaskExecutor taskExecutor, TaskEventPublisher eventPublisher) {
-        this.taskStore = taskStore;
+        this(taskStore, asOperationsStore(taskStore), properties, taskExecutor, eventPublisher);
+    }
+
+    public WorkerScheduler(TaskCommandStore taskCommandStore,
+                           TaskOperationsStore taskOperationsStore,
+                           WorkerProperties properties,
+                           TaskExecutor taskExecutor,
+                           TaskEventPublisher eventPublisher) {
+        this.taskCommandStore = taskCommandStore;
+        this.taskOperationsStore = taskOperationsStore;
         this.properties = properties;
         this.taskExecutor = taskExecutor;
         this.eventPublisher = eventPublisher != null ? eventPublisher : new TaskEventPublisher();
@@ -71,7 +82,7 @@ public class WorkerScheduler {
             return;
         }
 
-        List<TaskInstance> tasks = taskStore.fetchPendingTasks(fetchSize);
+        List<TaskInstance> tasks = taskCommandStore.fetchPendingTasks(fetchSize);
         if (tasks == null || tasks.isEmpty()) {
             return;
         }
@@ -84,13 +95,13 @@ public class WorkerScheduler {
             try {
                 LocalDateTime lockExpireAt = LocalDateTime.now()
                         .plusSeconds(Math.max(properties.getLockTtlSeconds(), 1L));
-                boolean claimed = taskStore.claimTask(task.getId(), workerId, lockExpireAt);
+                boolean claimed = taskCommandStore.claimTask(task.getId(), workerId, lockExpireAt);
                 if (claimed) {
                     claimedCount++;
                     log.info("Worker {} claimed task: id={}, type={}, bizId={}",
                             workerId, task.getId(), task.getTaskType(), task.getBizId());
 
-                    TaskInstance claimedTask = taskStore.getById(task.getId());
+                    TaskInstance claimedTask = taskCommandStore.getById(task.getId());
                     if (claimedTask == null) {
                         log.warn("Worker {} claimed task but failed to load latest lease: id={}",
                                 workerId, task.getId());
@@ -121,7 +132,12 @@ public class WorkerScheduler {
         int availableCapacity = taskExecutor.getAvailableCapacity();
         int runningTaskCount = Math.max(maxCapacity - availableCapacity, 0);
 
-        taskStore.reportWorkerHeartbeat(WorkerHeartbeat.builder()
+        if (taskOperationsStore == null) {
+            log.debug("Worker heartbeat skipped because TaskOperationsStore is not configured");
+            return;
+        }
+
+        taskOperationsStore.reportWorkerHeartbeat(WorkerHeartbeat.builder()
                 .workerId(workerId)
                 .status("ONLINE")
                 .runningTaskCount(runningTaskCount)
@@ -129,6 +145,10 @@ public class WorkerScheduler {
                 .availableCapacity(availableCapacity)
                 .lastHeartbeatTime(LocalDateTime.now())
                 .build());
+    }
+
+    private static TaskOperationsStore asOperationsStore(TaskCommandStore taskStore) {
+        return taskStore instanceof TaskOperationsStore operationsStore ? operationsStore : null;
     }
 
     private int resolveFetchSize() {

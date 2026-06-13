@@ -344,13 +344,13 @@ class TaskAdminControllerTest {
         List<TaskEvent> events = new ArrayList<>();
         controller = new TaskAdminController(taskStore, false, null, 60L, true, true,
                 200, 1000, true, new TaskEventPublisher(List.of(events::add)));
-        when(taskStore.getById(1L)).thenReturn(TaskInstance.builder()
-                .id(1L)
-                .taskType("TYPE_A")
-                .bizId("BIZ-1")
-                .status(TaskStatus.RETRYING)
-                .traceId("trace-task")
-                .build());
+        TaskDetailVO before = new TaskDetailVO();
+        before.setId(1L);
+        before.setTaskType("TYPE_A");
+        before.setBizId("BIZ-1");
+        before.setStatusCode(TaskStatus.RETRYING.getCode());
+        before.setTraceId("trace-task");
+        when(taskStore.getTaskDetail(1L)).thenReturn(before);
         when(taskStore.cancelTask(1L)).thenReturn(true);
 
         Result<Boolean> result = controller.cancel(1L, "admin", "trace-1");

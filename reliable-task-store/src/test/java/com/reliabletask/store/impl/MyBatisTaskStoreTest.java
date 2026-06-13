@@ -16,6 +16,10 @@ import com.reliabletask.core.model.BatchOperationResult;
 import com.reliabletask.core.model.TaskExecutionLease;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.WorkerHeartbeat;
+import com.reliabletask.core.spi.TaskCommandStore;
+import com.reliabletask.core.spi.TaskOperationsStore;
+import com.reliabletask.core.spi.TaskQueryStore;
+import com.reliabletask.core.spi.TaskStore;
 import com.reliabletask.core.vo.FailureTopVO;
 import com.reliabletask.core.vo.TaskDetailVO;
 import com.reliabletask.core.vo.SlowTaskVO;
@@ -93,6 +97,20 @@ class MyBatisTaskStoreTest {
     void setUp() {
         taskStore = new MyBatisTaskStore(taskMapper, taskLogMapper,
                 workerMapper, auditLogMapper, batchOperationMapper);
+    }
+
+    @Test
+    @DisplayName("MyBatisTaskStore - 可覆盖新旧 Store 边界")
+    void myBatisTaskStore_isAssignableToSplitStoreInterfaces() {
+        TaskCommandStore commandStore = taskStore;
+        TaskQueryStore queryStore = taskStore;
+        TaskOperationsStore operationsStore = taskStore;
+        TaskStore legacyStore = taskStore;
+
+        assertSame(taskStore, commandStore);
+        assertSame(taskStore, queryStore);
+        assertSame(taskStore, operationsStore);
+        assertSame(taskStore, legacyStore);
     }
 
     // ==================== save ====================

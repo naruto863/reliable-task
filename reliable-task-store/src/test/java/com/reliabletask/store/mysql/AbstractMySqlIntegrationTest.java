@@ -51,6 +51,8 @@ abstract class AbstractMySqlIntegrationTest {
 
     @DynamicPropertySource
     static void configureMySql(DynamicPropertyRegistry registry) {
+        registry.add("spring.flyway.enabled", () -> "false");
+        registry.add("spring.liquibase.enabled", () -> "false");
         String mode = propertyOrEnv(MODE_PROPERTY, MODE_ENV, MODE_TESTCONTAINERS);
         if (MODE_LOCAL.equalsIgnoreCase(mode)) {
             String jdbcUrl = requiredPropertyOrEnv(LOCAL_URL_PROPERTY, LOCAL_URL_ENV);

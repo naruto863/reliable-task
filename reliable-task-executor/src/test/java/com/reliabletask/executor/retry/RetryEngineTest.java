@@ -21,7 +21,7 @@ import com.reliabletask.core.spi.RetryStrategy;
 import com.reliabletask.core.spi.TaskHandler;
 import com.reliabletask.core.spi.TaskAuditRecorder;
 import com.reliabletask.core.spi.TaskMetricsRecorder;
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskCommandStore;
 import com.reliabletask.core.strategy.RetryStrategyRegistry;
 import com.reliabletask.executor.alert.TaskAlertService;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,7 +49,7 @@ import static org.mockito.Mockito.*;
 class RetryEngineTest {
 
     @Mock
-    private TaskStore taskStore;
+    private TaskCommandStore taskStore;
 
     @Mock
     private TaskMetricsRecorder metricsRecorder;

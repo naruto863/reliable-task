@@ -4,7 +4,8 @@ import com.reliabletask.admin.controller.AdminQueryGuard;
 import com.reliabletask.admin.controller.TaskAdminController;
 import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.spi.TaskAuthorizationProvider;
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskOperationsStore;
+import com.reliabletask.core.spi.TaskQueryStore;
 import com.reliabletask.core.spi.noop.NoopTaskAuthorizationProvider;
 import com.reliabletask.starter.config.ReliableTaskProperties;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -18,13 +19,13 @@ import org.springframework.beans.factory.ObjectProvider;
 /**
  * 管理后台自动配置类
  *
- * <p>注册管理接口 Controller，使业务应用只引入 starter 即可启用 Admin API，
+ * <p>注册管理接口 Controller，使业务应用显式引入 Admin starter 后即可启用 Admin API，
  * 不依赖业务应用扫描 com.reliabletask.admin 包。
  */
 @AutoConfiguration(after = {ReliableTaskAutoConfiguration.class, ReliableTaskStoreAutoConfiguration.class})
 @ConditionalOnProperty(prefix = "reliable-task.admin", name = "enabled", havingValue = "true", matchIfMissing = false)
 @ConditionalOnClass(TaskAdminController.class)
-@ConditionalOnBean(TaskStore.class)
+@ConditionalOnBean({TaskQueryStore.class, TaskOperationsStore.class})
 public class ReliableTaskAdminAutoConfiguration {
 
     @Bean
@@ -36,12 +37,14 @@ public class ReliableTaskAdminAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(TaskAdminController.class)
-    public TaskAdminController taskAdminController(TaskStore taskStore,
+    public TaskAdminController taskAdminController(TaskQueryStore taskQueryStore,
+                                                   TaskOperationsStore taskOperationsStore,
                                                    ReliableTaskProperties properties,
                                                    ObjectProvider<TaskAuthorizationProvider> authorizationProvider,
                                                    ObjectProvider<TaskEventPublisher> eventPublisher) {
         ReliableTaskProperties.Admin.Query query = properties.getAdmin().getQuery();
-        return new TaskAdminController(taskStore,
+        return new TaskAdminController(taskQueryStore,
+                taskOperationsStore,
                 properties.getAdmin().getAuth().isEnabled(),
                 authorizationProvider.getIfAvailable(),
                 properties.getWorker().getHeartbeat().getStaleWorkerThresholdSeconds(),

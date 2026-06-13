@@ -6,7 +6,7 @@ import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.model.TaskEvent;
 import com.reliabletask.core.model.TaskExecutionLease;
 import com.reliabletask.core.model.TaskInstance;
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskCommandStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 
@@ -31,15 +31,15 @@ import java.util.List;
 @Slf4j
 public class TaskRecoveryScheduler {
 
-    private final TaskStore taskStore;
+    private final TaskCommandStore taskStore;
     private final RecoveryProperties properties;
     private final TaskEventPublisher eventPublisher;
 
-    public TaskRecoveryScheduler(TaskStore taskStore, RecoveryProperties properties) {
+    public TaskRecoveryScheduler(TaskCommandStore taskStore, RecoveryProperties properties) {
         this(taskStore, properties, new TaskEventPublisher());
     }
 
-    public TaskRecoveryScheduler(TaskStore taskStore, RecoveryProperties properties,
+    public TaskRecoveryScheduler(TaskCommandStore taskStore, RecoveryProperties properties,
                                  TaskEventPublisher eventPublisher) {
         this.taskStore = taskStore;
         this.properties = properties;

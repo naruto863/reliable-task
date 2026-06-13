@@ -16,6 +16,8 @@ import com.reliabletask.core.model.TaskEvent;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.WorkerHeartbeat;
 import com.reliabletask.core.spi.TaskAuthorizationProvider;
+import com.reliabletask.core.spi.TaskOperationsStore;
+import com.reliabletask.core.spi.TaskQueryStore;
 import com.reliabletask.core.spi.TaskStore;
 import com.reliabletask.core.spi.noop.NoopTaskAuthorizationProvider;
 import com.reliabletask.core.vo.TaskDetailVO;
@@ -53,7 +55,8 @@ public class TaskAdminController {
     private static final int DEFAULT_FAILURE_TOP_LIMIT = 20;
     private static final int HARD_MAX_FAILURE_TOP_LIMIT = 100;
 
-    private final TaskStore taskStore;
+    private final TaskQueryStore taskQueryStore;
+    private final TaskOperationsStore taskOperationsStore;
     private final boolean authEnabled;
     private final TaskAuthorizationProvider authorizationProvider;
     private final long staleWorkerThresholdSeconds;
@@ -130,11 +133,12 @@ public class TaskAdminController {
                                int maxBatchLimit,
                                boolean writeEnabled,
                                TaskEventPublisher eventPublisher) {
-        this(taskStore, authEnabled, authorizationProvider, staleWorkerThresholdSeconds, auditEnabled, batchEnabled,
+        this(taskStore, taskStore, authEnabled, authorizationProvider, staleWorkerThresholdSeconds, auditEnabled, batchEnabled,
                 maxPageSize, maxBatchLimit, writeEnabled, eventPublisher, AdminQueryGuard.defaults());
     }
 
-    public TaskAdminController(TaskStore taskStore,
+    public TaskAdminController(TaskQueryStore taskQueryStore,
+                               TaskOperationsStore taskOperationsStore,
                                boolean authEnabled,
                                TaskAuthorizationProvider authorizationProvider,
                                long staleWorkerThresholdSeconds,
@@ -145,7 +149,8 @@ public class TaskAdminController {
                                boolean writeEnabled,
                                TaskEventPublisher eventPublisher,
                                AdminQueryGuard adminQueryGuard) {
-        this.taskStore = taskStore;
+        this.taskQueryStore = taskQueryStore;
+        this.taskOperationsStore = taskOperationsStore;
         this.authEnabled = authEnabled;
         this.authorizationProvider = authorizationProvider;
         this.staleWorkerThresholdSeconds = staleWorkerThresholdSeconds;
@@ -196,7 +201,7 @@ public class TaskAdminController {
                 .pageSize(normalizePageSize(pageSize))
                 .build();
 
-        PageResult<TaskVO> pageResult = taskStore.listTasks(request);
+        PageResult<TaskVO> pageResult = taskQueryStore.listTasks(request);
         return Result.success(pageResult);
     }
 
@@ -230,7 +235,7 @@ public class TaskAdminController {
                 .createTimeEnd(normalized.createTimeEnd())
                 .limit(normalized.limit())
                 .build();
-        return Result.success(taskStore.listRecentFailures(request));
+        return Result.success(taskQueryStore.listRecentFailures(request));
     }
 
     /**
@@ -263,7 +268,7 @@ public class TaskAdminController {
                 .createTimeEnd(normalized.createTimeEnd())
                 .limit(normalized.limit())
                 .build();
-        return Result.success(taskStore.listSlowTasks(request));
+        return Result.success(taskQueryStore.listSlowTasks(request));
     }
 
     /**
@@ -299,7 +304,7 @@ public class TaskAdminController {
                 .createTimeEnd(normalized.createTimeEnd())
                 .limit(normalized.limit())
                 .build();
-        return Result.success(taskStore.listFailureTop(request));
+        return Result.success(taskQueryStore.listFailureTop(request));
     }
 
     /**
@@ -312,7 +317,7 @@ public class TaskAdminController {
         if (forbidden != null) {
             return forbidden;
         }
-        TaskDetailVO detail = taskStore.getTaskDetail(id);
+        TaskDetailVO detail = taskQueryStore.getTaskDetail(id);
         if (detail == null) {
             return Result.error(404, "Task not found: " + id);
         }
@@ -329,7 +334,7 @@ public class TaskAdminController {
         if (forbidden != null) {
             return forbidden;
         }
-        List<TaskLogVO> logs = taskStore.getTaskLogs(id);
+        List<TaskLogVO> logs = taskQueryStore.getTaskLogs(id);
         return Result.success(logs);
     }
 
@@ -344,11 +349,11 @@ public class TaskAdminController {
         if (forbidden != null) {
             return forbidden;
         }
-        TaskDetailVO detail = taskStore.getTaskDetail(id);
+        TaskDetailVO detail = taskQueryStore.getTaskDetail(id);
         if (detail == null) {
             return Result.error(404, "Task not found: " + id);
         }
-        return Result.success(taskStore.getTaskTimeline(id));
+        return Result.success(taskQueryStore.getTaskTimeline(id));
     }
 
     /**
@@ -361,7 +366,7 @@ public class TaskAdminController {
         if (forbidden != null) {
             return forbidden;
         }
-        TaskStatsVO stats = taskStore.getStats();
+        TaskStatsVO stats = taskQueryStore.getStats();
         return Result.success(stats);
     }
 
@@ -375,7 +380,7 @@ public class TaskAdminController {
         if (forbidden != null) {
             return forbidden;
         }
-        return Result.success(taskStore.listWorkers());
+        return Result.success(taskOperationsStore.listWorkers());
     }
 
     /**
@@ -390,7 +395,7 @@ public class TaskAdminController {
         }
         LocalDateTime heartbeatBefore =
                 LocalDateTime.now().minusSeconds(Math.max(staleWorkerThresholdSeconds, 1L));
-        return Result.success(taskStore.findStaleWorkers(heartbeatBefore));
+        return Result.success(taskOperationsStore.findStaleWorkers(heartbeatBefore));
     }
 
     /**
@@ -412,7 +417,7 @@ public class TaskAdminController {
             return forbidden;
         }
         TaskInstance before = loadTaskForEvent(id);
-        boolean success = taskStore.requeueTask(id);
+        boolean success = taskOperationsStore.requeueTask(id);
         if (!success) {
             recordAdminAudit("TASK_RETRY", operator, id, "retry task",
                     "FAILED", "Task cannot be retried.", traceId);
@@ -443,7 +448,7 @@ public class TaskAdminController {
             return forbidden;
         }
         TaskInstance before = loadTaskForEvent(id);
-        boolean success = taskStore.cancelTask(id);
+        boolean success = taskOperationsStore.cancelTask(id);
         if (!success) {
             recordAdminAudit("TASK_CANCEL", operator, id, "cancel task",
                     "FAILED", "Task cannot be cancelled.", traceId);
@@ -475,7 +480,7 @@ public class TaskAdminController {
             return forbidden;
         }
         TaskInstance before = loadTaskForEvent(id);
-        boolean success = taskStore.requeueTask(id);
+        boolean success = taskOperationsStore.requeueTask(id);
         if (!success) {
             recordAdminAudit("TASK_REQUEUE", operator, id, "requeue task",
                     "FAILED", "Task cannot be requeued.", traceId);
@@ -513,7 +518,7 @@ public class TaskAdminController {
             return Result.error(400, "payload is required");
         }
 
-        boolean success = taskStore.updatePayload(id, payload);
+        boolean success = taskOperationsStore.updatePayload(id, payload);
         if (!success) {
             recordAdminAudit("TASK_UPDATE_PAYLOAD", operator, id, "update payload",
                     "FAILED", "Task payload can only be updated for PENDING or RETRYING tasks.", traceId);
@@ -537,7 +542,7 @@ public class TaskAdminController {
         if (forbidden != null) {
             return forbidden;
         }
-        return Result.success(taskStore.getAuditLogsByTaskId(id));
+        return Result.success(taskOperationsStore.getAuditLogsByTaskId(id));
     }
 
     /**
@@ -559,7 +564,7 @@ public class TaskAdminController {
         if (forbidden != null) {
             return forbidden;
         }
-        return Result.success(taskStore.listAuditLogs(operator, createTimeStart, createTimeEnd,
+        return Result.success(taskOperationsStore.listAuditLogs(operator, createTimeStart, createTimeEnd,
                 normalizePageNum(pageNum), normalizePageSize(pageSize)));
     }
 
@@ -594,7 +599,7 @@ public class TaskAdminController {
                 .dryRun(true)
                 .success(true)
                 .build();
-        taskStore.updateBatchOperationResult(result);
+        taskOperationsStore.updateBatchOperationResult(result);
         recordBatchAudit("BATCH_PREVIEW", operator, batchId, requestSummary(request),
                 "SUCCESS", null, traceId);
         return Result.success(result);
@@ -622,8 +627,8 @@ public class TaskAdminController {
         BatchOperationRequest effective = request.withStatus(TaskStatus.DEAD.getCode());
         List<Long> taskIds = findBatchTaskIds(effective, normalizeLimit(effective.limit()));
         Long batchId = createBatchRecord("REQUEUE_DEAD", operator, effective, false, traceId);
-        BatchOperationResult result = executeBatch(batchId, taskIds, taskStore::requeueTask, false);
-        taskStore.updateBatchOperationResult(result);
+        BatchOperationResult result = executeBatch(batchId, taskIds, taskOperationsStore::requeueTask, false);
+        taskOperationsStore.updateBatchOperationResult(result);
         recordBatchAudit("BATCH_REQUEUE_DEAD", operator, batchId, requestSummary(effective),
                 result.isSuccess() ? "SUCCESS" : "FAILED", result.getErrorMsg(), traceId);
         publishBatchEvents(TaskEventType.REQUEUED, taskIds, result.getFailedTaskIds(),
@@ -653,8 +658,8 @@ public class TaskAdminController {
         int limit = normalizeLimit(request.limit());
         List<Long> taskIds = findCancelableTaskIds(request, limit);
         Long batchId = createBatchRecord("CANCEL_PENDING_RETRYING", operator, request, false, traceId);
-        BatchOperationResult result = executeBatch(batchId, taskIds, taskStore::cancelTask, false);
-        taskStore.updateBatchOperationResult(result);
+        BatchOperationResult result = executeBatch(batchId, taskIds, taskOperationsStore::cancelTask, false);
+        taskOperationsStore.updateBatchOperationResult(result);
         recordBatchAudit("BATCH_CANCEL", operator, batchId, requestSummary(request),
                 result.isSuccess() ? "SUCCESS" : "FAILED", result.getErrorMsg(), traceId);
         publishBatchEvents(TaskEventType.CANCELLED, taskIds, result.getFailedTaskIds(),
@@ -693,7 +698,7 @@ public class TaskAdminController {
         if (!auditEnabled) {
             return;
         }
-        taskStore.saveAuditLog(AuditLog.builder()
+        taskOperationsStore.saveAuditLog(AuditLog.builder()
                 .operationType(operationType)
                 .operator(operator)
                 .targetType("TASK")
@@ -712,7 +717,7 @@ public class TaskAdminController {
         if (!auditEnabled) {
             return;
         }
-        taskStore.saveAuditLog(AuditLog.builder()
+        taskOperationsStore.saveAuditLog(AuditLog.builder()
                 .operationType(operationType)
                 .operator(operator)
                 .targetType("BATCH_OPERATION")
@@ -728,14 +733,14 @@ public class TaskAdminController {
 
     private Long createBatchRecord(String operationType, String operator, BatchOperationRequest request,
                                    boolean dryRun, String traceId) {
-        return taskStore.createBatchOperation(operationType, operator, request.taskType(),
+        return taskOperationsStore.createBatchOperation(operationType, operator, request.taskType(),
                 request.status() == null ? null : TaskStatus.fromCode(request.status()),
                 request.createTimeStart(), request.createTimeEnd(), normalizeLimit(request.limit()),
                 dryRun, requestSummary(request), traceId);
     }
 
     private List<Long> findBatchTaskIds(BatchOperationRequest request, int limit) {
-        return taskStore.findOperableTaskIds(request.taskType(),
+        return taskOperationsStore.findOperableTaskIds(request.taskType(),
                 request.status() == null ? null : TaskStatus.fromCode(request.status()),
                 request.createTimeStart(), request.createTimeEnd(), limit);
     }
@@ -748,12 +753,12 @@ public class TaskAdminController {
             }
             return findBatchTaskIds(request, limit);
         }
-        List<Long> pendingIds = taskStore.findOperableTaskIds(request.taskType(), TaskStatus.PENDING,
+        List<Long> pendingIds = taskOperationsStore.findOperableTaskIds(request.taskType(), TaskStatus.PENDING,
                 request.createTimeStart(), request.createTimeEnd(), limit);
         if (pendingIds.size() >= limit) {
             return pendingIds;
         }
-        List<Long> retryingIds = taskStore.findOperableTaskIds(request.taskType(), TaskStatus.RETRYING,
+        List<Long> retryingIds = taskOperationsStore.findOperableTaskIds(request.taskType(), TaskStatus.RETRYING,
                 request.createTimeStart(), request.createTimeEnd(), limit - pendingIds.size());
         return java.util.stream.Stream.concat(pendingIds.stream(), retryingIds.stream()).toList();
     }
@@ -862,7 +867,8 @@ public class TaskAdminController {
             return null;
         }
         try {
-            return taskStore.getById(taskId);
+            TaskDetailVO detail = taskQueryStore.getTaskDetail(taskId);
+            return toTaskInstance(detail);
         } catch (RuntimeException e) {
             return null;
         }
@@ -870,6 +876,29 @@ public class TaskAdminController {
 
     private TaskStatus statusOf(TaskInstance task) {
         return task == null ? null : task.getStatus();
+    }
+
+    private TaskInstance toTaskInstance(TaskDetailVO detail) {
+        if (detail == null) {
+            return null;
+        }
+        TaskStatus status = null;
+        if (detail.getStatusCode() != null) {
+            try {
+                status = TaskStatus.fromCode(detail.getStatusCode());
+            } catch (IllegalArgumentException ignored) {
+                status = null;
+            }
+        }
+        return TaskInstance.builder()
+                .id(detail.getId())
+                .taskType(detail.getTaskType())
+                .bizType(detail.getBizType())
+                .bizId(detail.getBizId())
+                .status(status)
+                .workerId(detail.getWorkerId())
+                .traceId(detail.getTraceId())
+                .build();
     }
 
     private void publishAdminEvent(TaskEventType eventType, Long taskId, TaskInstance task,

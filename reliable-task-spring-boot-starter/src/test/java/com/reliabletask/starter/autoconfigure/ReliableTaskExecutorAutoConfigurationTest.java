@@ -7,6 +7,7 @@ import com.reliabletask.core.deadletter.TaskDeadLetterDispatcher;
 import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.model.DeadLetterContext;
 import com.reliabletask.core.model.FailureDecision;
+import com.reliabletask.core.model.TaskHandlerMetadata;
 import com.reliabletask.core.spi.FailureClassifier;
 import com.reliabletask.core.spi.RetryStrategy;
 import com.reliabletask.core.spi.TaskDeadLetterHandler;
@@ -16,7 +17,11 @@ import com.reliabletask.core.spi.TaskTemplate;
 import com.reliabletask.core.spi.IdempotencyStrategy;
 import com.reliabletask.core.spi.TaskAuditRecorder;
 import com.reliabletask.core.spi.TaskMetricsRecorder;
+import com.reliabletask.core.spi.TaskPayloadCodec;
+import com.reliabletask.core.spi.TaskPayloadCodecContext;
 import com.reliabletask.core.spi.TaskPayloadSerializer;
+import com.reliabletask.core.spi.TaskNameResolver;
+import com.reliabletask.core.spi.TaskTraceIdGenerator;
 import com.reliabletask.core.spi.WorkerHeartbeatReporter;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.spi.noop.NoopTaskAuditRecorder;
@@ -24,6 +29,7 @@ import com.reliabletask.core.spi.noop.NoopTaskDeadLetterHandler;
 import com.reliabletask.core.spi.noop.NoopTaskMetricsRecorder;
 import com.reliabletask.core.spi.noop.NoopWorkerHeartbeatReporter;
 import com.reliabletask.core.spi.noop.NoopAlarmNotifier;
+import com.reliabletask.core.trace.DefaultTaskTraceIdGenerator;
 import com.reliabletask.executor.alert.AlertProperties;
 import com.reliabletask.executor.alert.DefaultTaskAlertService;
 import com.reliabletask.executor.alert.NoopTaskAlertService;
@@ -31,8 +37,13 @@ import com.reliabletask.executor.alert.TaskAlertScheduler;
 import com.reliabletask.executor.alert.TaskAlertService;
 import com.reliabletask.core.strategy.AllowAfterTerminalIdempotencyStrategy;
 import com.reliabletask.core.strategy.StrictUniqueIdempotencyStrategy;
+import com.reliabletask.core.handler.DefaultTaskNameResolver;
 import com.reliabletask.executor.handler.TaskExecutor;
 import com.reliabletask.executor.handler.TaskHandlerRegistry;
+import com.reliabletask.executor.interceptor.TaskExecutionContext;
+import com.reliabletask.executor.interceptor.TaskInterceptor;
+import com.reliabletask.executor.interceptor.TaskInterceptorChain;
+import com.reliabletask.executor.interceptor.TraceTaskInterceptor;
 import com.reliabletask.executor.recovery.RecoveryProperties;
 import com.reliabletask.executor.retry.RetryProperties;
 import com.reliabletask.core.strategy.RetryStrategyRegistry;
@@ -52,6 +63,7 @@ import org.springframework.boot.autoconfigure.task.TaskExecutionAutoConfiguratio
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 
 import java.lang.reflect.Proxy;
 
@@ -76,6 +88,11 @@ class ReliableTaskExecutorAutoConfigurationTest {
             assertThat(context).hasSingleBean(WorkerProperties.class);
             assertThat(context).hasSingleBean(RecoveryProperties.class);
             assertThat(context).hasSingleBean(TaskPayloadSerializer.class);
+            assertThat(context).hasSingleBean(TaskPayloadCodec.class);
+            assertThat(context).hasSingleBean(TaskNameResolver.class);
+            assertThat(context).hasSingleBean(TaskTraceIdGenerator.class);
+            assertThat(context).hasSingleBean(TraceTaskInterceptor.class);
+            assertThat(context).hasSingleBean(TaskInterceptorChain.class);
             assertThat(context).hasSingleBean(TaskMetricsRecorder.class);
             assertThat(context).hasSingleBean(TaskAuditRecorder.class);
             assertThat(context).hasSingleBean(WorkerHeartbeatReporter.class);
@@ -90,6 +107,10 @@ class ReliableTaskExecutorAutoConfigurationTest {
             assertThat(context).doesNotHaveBean(TaskAlertScheduler.class);
             assertThat(context).getBean(TaskPayloadSerializer.class)
                     .isInstanceOf(JacksonTaskPayloadSerializer.class);
+            assertThat(context).getBean(TaskNameResolver.class)
+                    .isInstanceOf(DefaultTaskNameResolver.class);
+            assertThat(context).getBean(TaskTraceIdGenerator.class)
+                    .isInstanceOf(DefaultTaskTraceIdGenerator.class);
             assertThat(context).getBean(TaskMetricsRecorder.class)
                     .isInstanceOf(NoopTaskMetricsRecorder.class);
             assertThat(context).getBean(TaskAuditRecorder.class)
@@ -160,21 +181,100 @@ class ReliableTaskExecutorAutoConfigurationTest {
     @DisplayName("自定义 V2 SPI Bean 时自动配置不覆盖")
     void customV2SpiBeans_areNotOverridden() {
         TaskPayloadSerializer customSerializer = stub(TaskPayloadSerializer.class);
+        TaskPayloadCodec customCodec = stub(TaskPayloadCodec.class);
         TaskMetricsRecorder customMetricsRecorder = stub(TaskMetricsRecorder.class);
         TaskAuditRecorder customAuditRecorder = stub(TaskAuditRecorder.class);
         WorkerHeartbeatReporter customHeartbeatReporter = stub(WorkerHeartbeatReporter.class);
 
         contextRunner
                 .withBean(TaskPayloadSerializer.class, () -> customSerializer)
+                .withBean(TaskPayloadCodec.class, () -> customCodec)
                 .withBean(TaskMetricsRecorder.class, () -> customMetricsRecorder)
                 .withBean(TaskAuditRecorder.class, () -> customAuditRecorder)
                 .withBean(WorkerHeartbeatReporter.class, () -> customHeartbeatReporter)
                 .run(context -> {
                     assertThat(context).getBean(TaskPayloadSerializer.class).isSameAs(customSerializer);
+                    assertThat(context).getBean(TaskPayloadCodec.class).isSameAs(customCodec);
                     assertThat(context).getBean(TaskMetricsRecorder.class).isSameAs(customMetricsRecorder);
                     assertThat(context).getBean(TaskAuditRecorder.class).isSameAs(customAuditRecorder);
                     assertThat(context).getBean(WorkerHeartbeatReporter.class).isSameAs(customHeartbeatReporter);
                 });
+    }
+
+    @Test
+    @DisplayName("自定义 TaskPayloadSerializer Bean 会适配为默认 codec")
+    void customTaskPayloadSerializer_isAdaptedToCodec() {
+        TaskPayloadSerializer customSerializer = new TaskPayloadSerializer() {
+            @Override
+            public String serialize(Object payload) {
+                return "serializer:" + payload;
+            }
+
+            @Override
+            public <T> T deserialize(String payload, Class<T> targetType) {
+                return targetType.cast(payload.replace("serializer:", ""));
+            }
+        };
+
+        contextRunner
+                .withBean(TaskPayloadSerializer.class, () -> customSerializer)
+                .run(context -> {
+                    assertThat(context).getBean(TaskPayloadSerializer.class).isSameAs(customSerializer);
+                    TaskPayloadCodec codec = context.getBean(TaskPayloadCodec.class);
+
+                    assertThat(codec.encode("payload", TaskPayloadCodecContext.encode(String.class)))
+                            .isEqualTo("serializer:payload");
+                    assertThat(codec.decode("serializer:payload", String.class,
+                            TaskPayloadCodecContext.decode(String.class))).isEqualTo("payload");
+                });
+    }
+
+    @Test
+    @DisplayName("自定义 TaskPayloadCodec Bean 优先于 serializer 适配器")
+    void customTaskPayloadCodec_isPreferredOverSerializerAdapter() {
+        TaskPayloadCodec customCodec = new TaskPayloadCodec() {
+            @Override
+            public String encode(Object payload, TaskPayloadCodecContext context) {
+                return "codec:" + payload;
+            }
+
+            @Override
+            public <T> T decode(String payload, Class<T> targetType, TaskPayloadCodecContext context) {
+                return targetType.cast(payload.replace("codec:", ""));
+            }
+        };
+
+        contextRunner
+                .withBean(TaskPayloadCodec.class, () -> customCodec)
+                .run(context -> {
+                    TaskPayloadCodec codec = context.getBean(TaskPayloadCodec.class);
+
+                    assertThat(codec).isSameAs(customCodec);
+                    assertThat(codec.encode("payload", TaskPayloadCodecContext.encode(String.class)))
+                            .isEqualTo("codec:payload");
+                });
+    }
+
+    @Test
+    @DisplayName("自定义 TaskTraceIdGenerator Bean 时自动配置不覆盖")
+    void customTaskTraceIdGenerator_isNotOverridden() {
+        TaskTraceIdGenerator customGenerator = request -> "custom-trace";
+
+        contextRunner
+                .withBean(TaskTraceIdGenerator.class, () -> customGenerator)
+                .run(context ->
+                        assertThat(context).getBean(TaskTraceIdGenerator.class).isSameAs(customGenerator));
+    }
+
+    @Test
+    @DisplayName("自定义 TaskNameResolver Bean 时自动配置不覆盖")
+    void customTaskNameResolver_isNotOverridden() {
+        TaskNameResolver customResolver = (handler, handlerClass, annotation) -> "custom-name";
+
+        contextRunner
+                .withBean(TaskNameResolver.class, () -> customResolver)
+                .run(context ->
+                        assertThat(context).getBean(TaskNameResolver.class).isSameAs(customResolver));
     }
 
     @Test
@@ -213,6 +313,25 @@ class ReliableTaskExecutorAutoConfigurationTest {
                             .publish(com.reliabletask.core.model.TaskEvent.builder().taskId(1L).build());
 
                     assertThat(listener.events).hasSize(1);
+                });
+    }
+
+    @Test
+    @DisplayName("自定义 TaskInterceptor Bean 按 @Order 接入 chain")
+    void customTaskInterceptorBeans_areOrderedInChain() {
+        contextRunner
+                .withUserConfiguration(CustomTaskInterceptorConfiguration.class)
+                .run(context -> {
+                    TaskInterceptorChain chain = context.getBean(TaskInterceptorChain.class);
+                    java.util.List<Class<?>> interceptorTypes = chain.getInterceptors().stream()
+                            .map(Object::getClass)
+                            .toList();
+
+                    assertThat(interceptorTypes)
+                            .containsSubsequence(
+                                    TraceTaskInterceptor.class,
+                                    FirstTaskInterceptor.class,
+                                    SecondTaskInterceptor.class);
                 });
     }
 
@@ -283,6 +402,16 @@ class ReliableTaskExecutorAutoConfigurationTest {
     }
 
     @Test
+    @DisplayName("Worker-only starter 不注册 Admin controller")
+    void workerOnlyStarter_doesNotRegisterAdminController() {
+        contextRunner
+                .withPropertyValues(
+                        "reliable-task.admin.enabled=true",
+                        "reliable-task.admin.auth.enabled=false")
+                .run(context -> assertThat(context.containsBean("taskAdminController")).isFalse());
+    }
+
+    @Test
     @DisplayName("@TaskHandler Bean 只注册一次")
     void annotatedTaskHandlerBean_isRegisteredOnce() {
         contextRunner
@@ -291,6 +420,61 @@ class ReliableTaskExecutorAutoConfigurationTest {
                     assertThat(context).hasNotFailed();
                     assertThat(context).getBean(TaskHandlerRegistry.class)
                             .satisfies(registry -> assertThat(registry.hasHandler("CREATE_SHIPMENT")).isTrue());
+                });
+    }
+
+    @Test
+    @DisplayName("TaskHandler metadata 随注册写入 registry")
+    void annotatedTaskHandlerBean_registersMetadata() {
+        contextRunner
+                .withUserConfiguration(AnnotatedTaskHandlerTestConfiguration.class)
+                .run(context -> {
+                    TaskHandlerRegistry registry = context.getBean(TaskHandlerRegistry.class);
+                    TaskHandlerMetadata metadata = registry.getMetadata("CREATE_SHIPMENT");
+
+                    assertThat(metadata.getTaskType()).isEqualTo("CREATE_SHIPMENT");
+                    assertThat(metadata.getHandlerClassName()).isEqualTo(TestCreateShipmentHandler.class.getName());
+                    assertThat(metadata.getPayloadType()).isEqualTo(String.class);
+                    assertThat(metadata.getMaxConcurrency()).isEqualTo(2);
+                    assertThat(metadata.getTimeoutMs()).isEqualTo(3000L);
+                });
+    }
+
+    @Test
+    @DisplayName("自定义 TaskNameResolver 参与 Handler 注册")
+    void customTaskNameResolver_isUsedForHandlerRegistration() {
+        contextRunner
+                .withUserConfiguration(CustomTaskNameResolverConfiguration.class)
+                .run(context -> {
+                    TaskHandlerRegistry registry = context.getBean(TaskHandlerRegistry.class);
+
+                    assertThat(registry.hasHandler("RESOLVED_ResolverNamedHandler")).isTrue();
+                    assertThat(registry.getMetadata("RESOLVED_ResolverNamedHandler").getTaskType())
+                            .isEqualTo("RESOLVED_ResolverNamedHandler");
+                });
+    }
+
+    @Test
+    @DisplayName("@TaskHandler 与 getTaskType 不一致时启动失败")
+    void mismatchedTaskHandlerAnnotation_failsContextStartup() {
+        contextRunner
+                .withUserConfiguration(MismatchedTaskHandlerConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasMessageContaining("@TaskHandler value must match getTaskType()");
+                });
+    }
+
+    @Test
+    @DisplayName("重复 taskType 时启动失败")
+    void duplicateTaskHandlerTaskType_failsContextStartup() {
+        contextRunner
+                .withUserConfiguration(DuplicateTaskHandlerConfiguration.class)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasMessageContaining("Duplicate TaskHandler for taskType: DUPLICATE_TASK");
                 });
     }
 
@@ -497,10 +681,59 @@ class ReliableTaskExecutorAutoConfigurationTest {
     }
 
     @Configuration(proxyBeanMethods = false)
+    static class CustomTaskInterceptorConfiguration {
+        @Bean
+        @Order(20)
+        SecondTaskInterceptor secondTaskInterceptor() {
+            return new SecondTaskInterceptor();
+        }
+
+        @Bean
+        @Order(10)
+        FirstTaskInterceptor firstTaskInterceptor() {
+            return new FirstTaskInterceptor();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
     static class CustomTaskDeadLetterHandlerConfiguration {
         @Bean
         RecordingTaskDeadLetterHandler recordingTaskDeadLetterHandler() {
             return new RecordingTaskDeadLetterHandler();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class CustomTaskNameResolverConfiguration {
+        @Bean
+        TaskNameResolver customTaskNameResolver() {
+            return (handler, handlerClass, annotation) -> "RESOLVED_" + handlerClass.getSimpleName();
+        }
+
+        @Bean
+        ResolverNamedHandler resolverNamedHandler() {
+            return new ResolverNamedHandler();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class MismatchedTaskHandlerConfiguration {
+        @Bean
+        MismatchedTaskHandler mismatchedTaskHandler() {
+            return new MismatchedTaskHandler();
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class DuplicateTaskHandlerConfiguration {
+        @Bean
+        FirstDuplicateTaskHandler firstDuplicateTaskHandler() {
+            return new FirstDuplicateTaskHandler();
+        }
+
+        @Bean
+        SecondDuplicateTaskHandler secondDuplicateTaskHandler() {
+            return new SecondDuplicateTaskHandler();
         }
     }
 
@@ -525,6 +758,20 @@ class ReliableTaskExecutorAutoConfigurationTest {
         }
     }
 
+    static class FirstTaskInterceptor implements TaskInterceptor {
+        @Override
+        public void beforeExecute(TaskExecutionContext context) {
+            // 测试只验证自动配置排序。
+        }
+    }
+
+    static class SecondTaskInterceptor implements TaskInterceptor {
+        @Override
+        public void beforeExecute(TaskExecutionContext context) {
+            // 测试只验证自动配置排序。
+        }
+    }
+
     static class RecordingTaskDeadLetterHandler implements TaskDeadLetterHandler {
         private final java.util.List<DeadLetterContext> contexts = new java.util.ArrayList<>();
 
@@ -542,8 +789,67 @@ class ReliableTaskExecutorAutoConfigurationTest {
         }
 
         @Override
+        public int maxConcurrency() {
+            return 2;
+        }
+
+        @Override
+        public long timeoutMs() {
+            return 3000L;
+        }
+
+        @Override
         public void execute(TaskInstance task) {
             // 测试只验证注册行为，不执行任务。
+        }
+    }
+
+    static class ResolverNamedHandler implements com.reliabletask.core.spi.TaskHandler {
+        @Override
+        public String getTaskType() {
+            return "ORIGINAL_NAME";
+        }
+
+        @Override
+        public void execute(TaskInstance task) {
+            // 测试只验证注册行为，不执行任务。
+        }
+    }
+
+    @com.reliabletask.core.annotation.TaskHandler("ANNOTATED_NAME")
+    static class MismatchedTaskHandler implements com.reliabletask.core.spi.TaskHandler {
+        @Override
+        public String getTaskType() {
+            return "METHOD_NAME";
+        }
+
+        @Override
+        public void execute(TaskInstance task) {
+            // 测试只验证启动失败。
+        }
+    }
+
+    static class FirstDuplicateTaskHandler implements com.reliabletask.core.spi.TaskHandler {
+        @Override
+        public String getTaskType() {
+            return "DUPLICATE_TASK";
+        }
+
+        @Override
+        public void execute(TaskInstance task) {
+            // 测试只验证启动失败。
+        }
+    }
+
+    static class SecondDuplicateTaskHandler implements com.reliabletask.core.spi.TaskHandler {
+        @Override
+        public String getTaskType() {
+            return "DUPLICATE_TASK";
+        }
+
+        @Override
+        public void execute(TaskInstance task) {
+            // 测试只验证启动失败。
         }
     }
 }

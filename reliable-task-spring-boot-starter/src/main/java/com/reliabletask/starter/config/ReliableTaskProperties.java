@@ -45,7 +45,7 @@ import java.util.Map;
  *     jitter-ratio: 0.0
  *     min-delay-ms: 0
  *     max-delay-ms: 300000
- *   # serializer.type is reserved; override TaskPayloadSerializer Bean to customize serialization.
+ *   # serializer.type is reserved; override TaskPayloadCodec or TaskPayloadSerializer Bean to customize payload handling.
  *   executor:
  *     default-core-size: 4
  *     default-max-size: 16
@@ -379,8 +379,8 @@ public class ReliableTaskProperties {
     @Data
     public static class Serializer {
         /**
-         * 保留配置。当前默认注册 JacksonTaskPayloadSerializer；
-         * 如需自定义序列化，请覆盖 TaskPayloadSerializer Bean。
+         * 保留配置。当前默认注册 JacksonTaskPayloadSerializer 并适配为 TaskPayloadCodec；
+         * 如需自定义 payload 处理，请优先覆盖 TaskPayloadCodec Bean，或继续覆盖 TaskPayloadSerializer Bean。
          */
         private String type = "JACKSON";
     }

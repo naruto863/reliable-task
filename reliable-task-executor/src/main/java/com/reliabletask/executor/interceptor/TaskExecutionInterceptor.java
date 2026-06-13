@@ -1,11 +1,9 @@
 package com.reliabletask.executor.interceptor;
 
-import com.reliabletask.core.context.TraceContext;
 import com.reliabletask.core.model.TaskInstance;
-import lombok.extern.slf4j.Slf4j;
 
 /**
- * 任务执行拦截器
+ * 旧任务执行拦截器兼容类。
  *
  * <p>在任务执行前后管理 MDC 中的 traceId:
  * <ul>
@@ -20,9 +18,11 @@ import lombok.extern.slf4j.Slf4j;
  *   → Handler.execute(task)  ← 此期间日志自动包含 traceId
  *   → afterExecute: MDC.remove(traceId)
  * </pre>
+ *
+ * <p>v0.6 起推荐使用 {@link TaskInterceptor}、{@link TaskInterceptorChain}
+ * 和默认 {@link TraceTaskInterceptor} 组合；本类保留旧构造路径兼容。
  */
-@Slf4j
-public class TaskExecutionInterceptor {
+public class TaskExecutionInterceptor extends TraceTaskInterceptor {
 
     /**
      * 执行前拦截
@@ -33,13 +33,7 @@ public class TaskExecutionInterceptor {
      * @param task 当前执行的任务实例
      */
     public void beforeExecute(TaskInstance task) {
-        if (task != null && task.getTraceId() != null) {
-            TraceContext.setTraceId(task.getTraceId());
-            log.debug("TraceId set for task execution: traceId={}, taskId={}",
-                    task.getTraceId(), task.getId());
-        } else {
-            TraceContext.clear();
-        }
+        beforeExecute(TaskExecutionContext.from(task));
     }
 
     /**
@@ -49,7 +43,6 @@ public class TaskExecutionInterceptor {
      * 无论执行成功还是失败都必须调用。
      */
     public void afterExecute() {
-        TraceContext.clear();
-        log.debug("TraceId cleared after task execution");
+        afterExecute(TaskExecutionContext.empty());
     }
 }

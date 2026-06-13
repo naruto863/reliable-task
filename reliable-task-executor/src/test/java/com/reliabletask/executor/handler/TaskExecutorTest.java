@@ -13,8 +13,13 @@ import com.reliabletask.core.model.TaskExecutionLease;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.spi.TaskHandler;
 import com.reliabletask.core.spi.TaskMetricsRecorder;
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskPayloadCodec;
+import com.reliabletask.core.spi.TaskPayloadCodecContext;
+import com.reliabletask.core.spi.TaskCommandStore;
+import com.reliabletask.executor.interceptor.TaskExecutionContext;
 import com.reliabletask.executor.interceptor.TaskExecutionInterceptor;
+import com.reliabletask.executor.interceptor.TaskInterceptor;
+import com.reliabletask.executor.interceptor.TaskInterceptorChain;
 import com.reliabletask.executor.retry.RetryEngine;
 import com.reliabletask.executor.threadpool.TaskExecutorFactory;
 import com.reliabletask.executor.worker.WorkerProperties;
@@ -29,6 +34,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -47,7 +53,7 @@ import static org.mockito.Mockito.*;
 class TaskExecutorTest {
 
     @Mock
-    private TaskStore taskStore;
+    private TaskCommandStore taskStore;
 
     @Mock(lenient = true)
     private TaskExecutorFactory executorFactory;
@@ -86,6 +92,46 @@ class TaskExecutorTest {
         verify(taskStore).saveLog(eq(1L), eq(1), eq("RUNNING"), eq("SUCCESS"),
                 eq(true), anyLong(), isNull(), isNull(), eq("worker-1"), eq("trace-1"));
         assertNull(TraceContext.getTraceId());
+    }
+
+    @Test
+    @DisplayName("execute - 成功路径调用 interceptor chain")
+    void execute_success_invokesInterceptorChain() {
+        List<String> events = new CopyOnWriteArrayList<>();
+        executor = new TaskExecutor(taskStore, registry, executorFactory, retryEngine,
+                TaskInterceptorChain.of(List.of(new RecordingTaskInterceptor(events))));
+        registry.registerHandler(new SuccessHandler());
+
+        TaskInstance task = TaskInstance.builder()
+                .id(101L).taskType("SUCCESS").bizId("BIZ-101")
+                .status(TaskStatus.RUNNING).executeCount(1).maxRetryCount(3)
+                .build();
+
+        executor.execute(task);
+
+        verify(taskStore).markSuccess(101L);
+        assertEquals(List.of("before:101", "before:101", "after:101", "after:101"), events);
+    }
+
+    @Test
+    @DisplayName("execute - Handler 异常触发 interceptor chain onError")
+    void execute_handlerFailure_invokesInterceptorChainOnError() {
+        List<String> events = new CopyOnWriteArrayList<>();
+        AtomicReference<Throwable> seenError = new AtomicReference<>();
+        executor = new TaskExecutor(taskStore, registry, executorFactory, retryEngine,
+                TaskInterceptorChain.of(List.of(new RecordingTaskInterceptor(events, seenError))));
+        registry.registerHandler(new RetryableExceptionHandler());
+
+        TaskInstance task = TaskInstance.builder()
+                .id(102L).taskType("RETRYABLE").bizId("BIZ-102")
+                .status(TaskStatus.RUNNING).executeCount(1).maxRetryCount(0)
+                .build();
+
+        executor.execute(task);
+
+        verify(taskStore).markDead(eq(102L), eq("RetryableException"), anyString());
+        assertEquals(List.of("before:102", "before:102", "error:102", "after:102", "after:102"), events);
+        assertEquals(RetryableException.class, seenError.get().getClass());
     }
 
     @Test
@@ -208,6 +254,49 @@ class TaskExecutorTest {
 
         verify(taskStore).markSuccess(12L);
         assertEquals("ORD-12", handler.received.get().orderId());
+    }
+
+    @Test
+    @DisplayName("execute - 自定义 codec 接收执行上下文")
+    void execute_customPayloadCodec_receivesExecutionContext() {
+        AtomicReference<TaskPayloadCodecContext> contextRef = new AtomicReference<>();
+        TaskPayloadCodec codec = new TaskPayloadCodec() {
+            @Override
+            public String encode(Object payload, TaskPayloadCodecContext context) {
+                throw new UnsupportedOperationException("encode is not used by executor");
+            }
+
+            @Override
+            public <T> T decode(String payload, Class<T> targetType, TaskPayloadCodecContext context) {
+                contextRef.set(context);
+                return targetType.cast(new OrderPayload(payload.replace("codec:", "")));
+            }
+        };
+        executor = new TaskExecutor(taskStore, registry, executorFactory, retryEngine,
+                new TaskExecutionInterceptor(), codec);
+        TypedPayloadHandler handler = new TypedPayloadHandler();
+        registry.registerHandler(handler);
+
+        TaskInstance task = TaskInstance.builder()
+                .id(120L).taskType("TYPED_PAYLOAD").bizType("ORDER").bizId("BIZ-120")
+                .tenantId("tenant-a").shardKey("shard-1").traceId("trace-codec")
+                .payload("codec:ORD-CODEC")
+                .status(TaskStatus.RUNNING).executeCount(1).maxRetryCount(3)
+                .build();
+
+        executor.execute(task);
+
+        verify(taskStore).markSuccess(120L);
+        assertEquals("ORD-CODEC", handler.received.get().orderId());
+        assertEquals(TaskPayloadCodecContext.Operation.DECODE, contextRef.get().getOperation());
+        assertEquals(120L, contextRef.get().getTaskId());
+        assertEquals("TYPED_PAYLOAD", contextRef.get().getTaskType());
+        assertEquals("ORDER", contextRef.get().getBizType());
+        assertEquals("BIZ-120", contextRef.get().getBizId());
+        assertEquals("tenant-a", contextRef.get().getTenantId());
+        assertEquals("shard-1", contextRef.get().getShardKey());
+        assertEquals("trace-codec", contextRef.get().getTraceId());
+        assertEquals(OrderPayload.class, contextRef.get().getTargetType());
     }
 
     @Test
@@ -554,6 +643,36 @@ class TaskExecutorTest {
     }
 
     record OrderPayload(String orderId) {
+    }
+
+    static class RecordingTaskInterceptor implements TaskInterceptor {
+        private final List<String> events;
+        private final AtomicReference<Throwable> seenError;
+
+        RecordingTaskInterceptor(List<String> events) {
+            this(events, new AtomicReference<>());
+        }
+
+        RecordingTaskInterceptor(List<String> events, AtomicReference<Throwable> seenError) {
+            this.events = events;
+            this.seenError = seenError;
+        }
+
+        @Override
+        public void beforeExecute(TaskExecutionContext context) {
+            events.add("before:" + context.getTaskId());
+        }
+
+        @Override
+        public void afterExecute(TaskExecutionContext context) {
+            events.add("after:" + context.getTaskId());
+        }
+
+        @Override
+        public void onError(TaskExecutionContext context, Throwable error) {
+            events.add("error:" + context.getTaskId());
+            seenError.set(error);
+        }
     }
 
     static class RetryableExceptionHandler implements TaskHandler {

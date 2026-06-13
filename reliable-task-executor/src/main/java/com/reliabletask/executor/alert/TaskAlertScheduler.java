@@ -1,6 +1,6 @@
 package com.reliabletask.executor.alert;
 
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskQueryStore;
 import com.reliabletask.core.vo.TaskStatsVO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -11,11 +11,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 @Slf4j
 public class TaskAlertScheduler {
 
-    private final TaskStore taskStore;
+    private final TaskQueryStore taskStore;
     private final AlertProperties properties;
     private final TaskAlertService alertService;
 
-    public TaskAlertScheduler(TaskStore taskStore, AlertProperties properties, TaskAlertService alertService) {
+    public TaskAlertScheduler(TaskQueryStore taskStore, AlertProperties properties, TaskAlertService alertService) {
         this.taskStore = taskStore;
         this.properties = properties;
         this.alertService = alertService;

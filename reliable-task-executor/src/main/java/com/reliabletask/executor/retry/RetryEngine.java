@@ -21,7 +21,7 @@ import com.reliabletask.core.spi.RetryStrategy;
 import com.reliabletask.core.spi.TaskAuditRecorder;
 import com.reliabletask.core.spi.TaskHandler;
 import com.reliabletask.core.spi.TaskMetricsRecorder;
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskCommandStore;
 import com.reliabletask.core.spi.noop.NoopTaskAuditRecorder;
 import com.reliabletask.core.spi.noop.NoopTaskMetricsRecorder;
 import com.reliabletask.core.strategy.RetryStrategyRegistry;
@@ -59,7 +59,7 @@ public class RetryEngine {
     /**
      * 任务存储，用于更新状态和记录日志
      */
-    private final TaskStore taskStore;
+    private final TaskCommandStore taskStore;
     private final TaskMetricsRecorder metricsRecorder;
     private final TaskAuditRecorder auditRecorder;
     private final TaskAlertService alertService;
@@ -71,24 +71,24 @@ public class RetryEngine {
     private final TaskDeadLetterDispatcher deadLetterDispatcher;
     private final FailureClassifier defaultFailureClassifier = new DefaultFailureClassifier();
 
-    public RetryEngine(TaskStore taskStore) {
+    public RetryEngine(TaskCommandStore taskStore) {
         this(taskStore, new NoopTaskMetricsRecorder(), new NoopTaskAuditRecorder());
     }
 
-    public RetryEngine(TaskStore taskStore,
+    public RetryEngine(TaskCommandStore taskStore,
                        TaskMetricsRecorder metricsRecorder,
                        TaskAuditRecorder auditRecorder) {
         this(taskStore, metricsRecorder, auditRecorder, new NoopTaskAlertService());
     }
 
-    public RetryEngine(TaskStore taskStore,
+    public RetryEngine(TaskCommandStore taskStore,
                        TaskMetricsRecorder metricsRecorder,
                        TaskAuditRecorder auditRecorder,
                        TaskAlertService alertService) {
         this(taskStore, metricsRecorder, auditRecorder, alertService, new DefaultTaskExceptionFormatter());
     }
 
-    public RetryEngine(TaskStore taskStore,
+    public RetryEngine(TaskCommandStore taskStore,
                        TaskMetricsRecorder metricsRecorder,
                        TaskAuditRecorder auditRecorder,
                        TaskAlertService alertService,
@@ -97,7 +97,7 @@ public class RetryEngine {
                 new RetryStrategyRegistry(), new RetryProperties());
     }
 
-    public RetryEngine(TaskStore taskStore,
+    public RetryEngine(TaskCommandStore taskStore,
                        TaskMetricsRecorder metricsRecorder,
                        TaskAuditRecorder auditRecorder,
                        TaskAlertService alertService,
@@ -108,7 +108,7 @@ public class RetryEngine {
                 retryStrategyRegistry, retryProperties, new DefaultFailureClassifier());
     }
 
-    public RetryEngine(TaskStore taskStore,
+    public RetryEngine(TaskCommandStore taskStore,
                        TaskMetricsRecorder metricsRecorder,
                        TaskAuditRecorder auditRecorder,
                        TaskAlertService alertService,
@@ -120,7 +120,7 @@ public class RetryEngine {
                 retryStrategyRegistry, retryProperties, failureClassifier, new TaskEventPublisher());
     }
 
-    public RetryEngine(TaskStore taskStore,
+    public RetryEngine(TaskCommandStore taskStore,
                        TaskMetricsRecorder metricsRecorder,
                        TaskAuditRecorder auditRecorder,
                        TaskAlertService alertService,
@@ -134,7 +134,7 @@ public class RetryEngine {
                 new TaskDeadLetterDispatcher());
     }
 
-    public RetryEngine(TaskStore taskStore,
+    public RetryEngine(TaskCommandStore taskStore,
                        TaskMetricsRecorder metricsRecorder,
                        TaskAuditRecorder auditRecorder,
                        TaskAlertService alertService,

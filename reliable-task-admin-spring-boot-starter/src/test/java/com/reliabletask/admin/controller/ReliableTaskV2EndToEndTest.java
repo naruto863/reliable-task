@@ -53,7 +53,7 @@ import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@DisplayName("ReliableTask V2 最小端到端验证")
+@DisplayName("ReliableTask Admin starter V2 最小端到端验证")
 class ReliableTaskV2EndToEndTest {
 
     private TestHarness harness;

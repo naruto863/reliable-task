@@ -1,0 +1,12 @@
+databaseChangeLog:
+  - changeSet:
+      id: reliable-task-initial-schema
+      author: reliable-task
+      changes:
+        - sqlFile:
+            path: db/schema.sql
+            relativeToChangelogFile: false
+            encoding: UTF-8
+            splitStatements: true
+            stripComments: false
+            endDelimiter: ;

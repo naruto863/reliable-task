@@ -6,6 +6,27 @@ This project follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-13
+
+### Added
+
+- Add narrow Store SPI interfaces: `TaskCommandStore`, `TaskQueryStore`, and `TaskOperationsStore`, while keeping `TaskStore` as a compatibility facade.
+- Add context-aware `TaskPayloadCodec` with adapters for existing `TaskPayloadSerializer` beans.
+- Add ordered `TaskInterceptor` chain wiring and default trace cleanup behavior.
+- Add `TaskTraceIdGenerator`, `TaskNameResolver`, and `TaskHandlerMetadata` extension points.
+- Add Flyway and Liquibase initial schema entry points for ReliableTask table initialization, backed by H2 MySQL-mode smoke tests.
+- Add `reliable-task-admin-spring-boot-starter` for explicit Admin REST auto-configuration and Web dependencies.
+
+### Changed
+
+- Split Admin REST auto-configuration into `reliable-task-admin-spring-boot-starter`; `reliable-task-spring-boot-starter` is now worker-only and no longer brings Admin/Web dependencies by default.
+- Rename the retry-table task-id index to `idx_retry_task_id` so the initial schema can be validated consistently in H2 MySQL mode while preserving indexed columns.
+- Change project release version to `0.6.0`.
+
+### Planned
+
+- Keep v0.7/v1.0 items out of v0.6 scope, including Web console, multi-store or MQ backends, Redis locks, workflow/DAG orchestration, complex multi-tenant platforms, Maven Central publication, and v1.0 API freeze.
+
 ## [0.5.0] - 2026-06-13
 
 ### Added
@@ -86,7 +107,8 @@ This project follows Semantic Versioning.
 - Document that Admin APIs require authentication, authorization, audit logging, and network access controls before production use.
 - Keep real local configuration out of version control and use placeholder values in example configuration.
 
-[Unreleased]: https://github.com/naruto863/reliable-task/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/naruto863/reliable-task/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/naruto863/reliable-task/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/naruto863/reliable-task/compare/v0.3.0...v0.5.0
 [0.3.0]: https://github.com/naruto863/reliable-task/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/naruto863/reliable-task/releases/tag/v0.1.0

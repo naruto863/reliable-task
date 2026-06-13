@@ -6,7 +6,8 @@ import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.model.TaskEvent;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.WorkerHeartbeat;
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskCommandStore;
+import com.reliabletask.core.spi.TaskOperationsStore;
 import com.reliabletask.executor.handler.TaskExecutor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -31,7 +32,10 @@ import static org.mockito.Mockito.*;
 class WorkerSchedulerTest {
 
     @Mock
-    private TaskStore taskStore;
+    private TaskCommandStore taskStore;
+
+    @Mock
+    private TaskOperationsStore taskOperationsStore;
 
     @Mock
     private TaskExecutor taskExecutor;
@@ -46,7 +50,8 @@ class WorkerSchedulerTest {
         properties.setPollIntervalMs(5000L);
         properties.setBatchSize(10);
 
-        scheduler = new WorkerScheduler(taskStore, properties, taskExecutor);
+        scheduler = new WorkerScheduler(taskStore, taskOperationsStore, properties, taskExecutor,
+                new TaskEventPublisher());
     }
 
     @Test
@@ -282,7 +287,7 @@ class WorkerSchedulerTest {
         scheduler.reportHeartbeat();
 
         ArgumentCaptor<WorkerHeartbeat> captor = ArgumentCaptor.forClass(WorkerHeartbeat.class);
-        verify(taskStore).reportWorkerHeartbeat(captor.capture());
+        verify(taskOperationsStore).reportWorkerHeartbeat(captor.capture());
         WorkerHeartbeat heartbeat = captor.getValue();
         assertEquals("ONLINE", heartbeat.getStatus());
         assertEquals(3, heartbeat.getRunningTaskCount());
@@ -296,6 +301,6 @@ class WorkerSchedulerTest {
     void reportHeartbeat_disabled_skipsReport() {
         scheduler.reportHeartbeat();
 
-        verify(taskStore, never()).reportWorkerHeartbeat(any());
+        verify(taskOperationsStore, never()).reportWorkerHeartbeat(any());
     }
 }

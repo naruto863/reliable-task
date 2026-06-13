@@ -1,13 +1,14 @@
 package com.reliabletask.executor.handler;
 
 import com.reliabletask.core.annotation.TaskHandler;
+import com.reliabletask.core.handler.DefaultTaskNameResolver;
+import com.reliabletask.core.spi.TaskNameResolver;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationListener;
 import org.springframework.context.event.ContextRefreshedEvent;
 import org.springframework.core.annotation.AnnotationUtils;
-import org.springframework.util.StringUtils;
 
 import java.util.Map;
 
@@ -38,9 +39,15 @@ import java.util.Map;
 public class TaskHandlerAutoRegistrar implements ApplicationListener<ContextRefreshedEvent> {
 
     private final TaskHandlerRegistry registry;
+    private final TaskNameResolver taskNameResolver;
 
     public TaskHandlerAutoRegistrar(TaskHandlerRegistry registry) {
+        this(registry, new DefaultTaskNameResolver());
+    }
+
+    public TaskHandlerAutoRegistrar(TaskHandlerRegistry registry, TaskNameResolver taskNameResolver) {
         this.registry = registry;
+        this.taskNameResolver = taskNameResolver;
     }
 
     @Override
@@ -61,10 +68,9 @@ public class TaskHandlerAutoRegistrar implements ApplicationListener<ContextRefr
 
             Class<?> handlerClass = AopUtils.getTargetClass(handler);
             TaskHandler annotation = AnnotationUtils.findAnnotation(handlerClass, TaskHandler.class);
-            String taskType = handler.getTaskType();
-            validateTaskType(beanName, handlerClass, annotation, taskType);
+            String taskType = taskNameResolver.resolve(handler, handlerClass, annotation);
             try {
-                registry.registerHandler(handler);
+                registry.registerHandler(taskType, handler, handlerClass, null);
                 registeredCount++;
                 log.info("Auto-registered TaskHandler: beanName={}, taskType={}, class={}",
                         beanName, taskType, handlerClass.getSimpleName());
@@ -76,19 +82,5 @@ public class TaskHandlerAutoRegistrar implements ApplicationListener<ContextRefr
         }
 
         log.info("TaskHandlerAutoRegistrar completed: {} handlers registered", registeredCount);
-    }
-
-    private void validateTaskType(String beanName, Class<?> handlerClass,
-                                  TaskHandler annotation, String taskType) {
-        if (!StringUtils.hasText(taskType)) {
-            throw new IllegalStateException("TaskHandler taskType must not be blank: beanName="
-                    + beanName + ", class=" + handlerClass.getName());
-        }
-        if (annotation != null && !annotation.value().equals(taskType)) {
-            throw new IllegalStateException("@TaskHandler value must match getTaskType(): beanName="
-                    + beanName + ", class=" + handlerClass.getName()
-                    + ", annotation=" + annotation.value()
-                    + ", getTaskType=" + taskType);
-        }
     }
 }

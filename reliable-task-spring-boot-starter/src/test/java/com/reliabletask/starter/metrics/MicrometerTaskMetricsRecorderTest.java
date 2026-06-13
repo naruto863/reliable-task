@@ -4,7 +4,7 @@ import com.reliabletask.core.enums.TaskEventType;
 import com.reliabletask.core.enums.TaskStatus;
 import com.reliabletask.core.model.TaskEvent;
 import com.reliabletask.core.model.TaskExecutionMetricsEvent;
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskQueryStore;
 import com.reliabletask.core.vo.TaskStatsVO;
 import com.reliabletask.executor.threadpool.TaskExecutorFactory;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -26,7 +26,7 @@ class MicrometerTaskMetricsRecorderTest {
     @DisplayName("record - 注册 Counter、Timer 和 Gauge")
     void record_registersCountersTimersAndGauges() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        TaskStore taskStore = mock(TaskStore.class);
+        TaskQueryStore taskStore = mock(TaskQueryStore.class);
         TaskExecutorFactory executorFactory = mock(TaskExecutorFactory.class);
         TaskStatsVO stats = new TaskStatsVO();
         stats.setPendingTasks(3L);
@@ -91,7 +91,7 @@ class MicrometerTaskMetricsRecorderTest {
     @DisplayName("record - 显式开启时保留 worker_id tag")
     void record_includeWorkerIdTagEnabled_keepsWorkerTag() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        TaskStore taskStore = mock(TaskStore.class);
+        TaskQueryStore taskStore = mock(TaskQueryStore.class);
         TaskExecutorFactory executorFactory = mock(TaskExecutorFactory.class);
         when(taskStore.getStats()).thenReturn(new TaskStatsVO());
 

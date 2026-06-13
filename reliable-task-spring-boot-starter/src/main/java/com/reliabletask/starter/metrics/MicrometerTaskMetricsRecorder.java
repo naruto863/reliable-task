@@ -3,7 +3,7 @@ package com.reliabletask.starter.metrics;
 import com.reliabletask.core.enums.TaskStatus;
 import com.reliabletask.core.model.TaskExecutionMetricsEvent;
 import com.reliabletask.core.spi.TaskMetricsRecorder;
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskQueryStore;
 import com.reliabletask.core.vo.TaskStatsVO;
 import com.reliabletask.executor.threadpool.TaskExecutorFactory;
 import com.reliabletask.starter.config.ReliableTaskProperties;
@@ -30,13 +30,13 @@ public class MicrometerTaskMetricsRecorder implements TaskMetricsRecorder {
     private final StatsSnapshot statsSnapshot;
 
     public MicrometerTaskMetricsRecorder(MeterRegistry meterRegistry,
-                                         TaskStore taskStore,
+                                         TaskQueryStore taskStore,
                                          TaskExecutorFactory executorFactory) {
         this(meterRegistry, taskStore, executorFactory, false, DEFAULT_STATS_CACHE_TTL_MS);
     }
 
     public MicrometerTaskMetricsRecorder(MeterRegistry meterRegistry,
-                                         TaskStore taskStore,
+                                         TaskQueryStore taskStore,
                                          TaskExecutorFactory executorFactory,
                                          ReliableTaskProperties.Metrics metrics) {
         this(meterRegistry, taskStore, executorFactory,
@@ -45,7 +45,7 @@ public class MicrometerTaskMetricsRecorder implements TaskMetricsRecorder {
     }
 
     public MicrometerTaskMetricsRecorder(MeterRegistry meterRegistry,
-                                         TaskStore taskStore,
+                                         TaskQueryStore taskStore,
                                          TaskExecutorFactory executorFactory,
                                          boolean includeWorkerIdTag,
                                          long statsCacheTtlMs) {
@@ -145,12 +145,12 @@ public class MicrometerTaskMetricsRecorder implements TaskMetricsRecorder {
     }
 
     private static class StatsSnapshot {
-        private final TaskStore taskStore;
+        private final TaskQueryStore taskStore;
         private final long ttlMs;
         private volatile TaskStatsVO cachedStats;
         private volatile long expiresAtMs;
 
-        StatsSnapshot(TaskStore taskStore, long ttlMs) {
+        StatsSnapshot(TaskQueryStore taskStore, long ttlMs) {
             this.taskStore = taskStore;
             this.ttlMs = Math.max(ttlMs, 1000L);
         }

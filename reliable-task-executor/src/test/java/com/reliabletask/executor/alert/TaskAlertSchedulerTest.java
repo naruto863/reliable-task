@@ -1,6 +1,6 @@
 package com.reliabletask.executor.alert;
 
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskQueryStore;
 import com.reliabletask.core.vo.TaskStatsVO;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -13,7 +13,7 @@ class TaskAlertSchedulerTest {
     @Test
     @DisplayName("scanPendingBacklog - pending 超阈值触发告警服务")
     void scanPendingBacklog_thresholdExceeded_notifies() {
-        TaskStore taskStore = mock(TaskStore.class);
+        TaskQueryStore taskStore = mock(TaskQueryStore.class);
         TaskAlertService alertService = mock(TaskAlertService.class);
         AlertProperties properties = new AlertProperties();
         properties.setEnabled(true);
@@ -30,7 +30,7 @@ class TaskAlertSchedulerTest {
     @Test
     @DisplayName("scanPendingBacklog - 告警关闭时不查询 Store")
     void scanPendingBacklog_disabled_doesNotQueryStore() {
-        TaskStore taskStore = mock(TaskStore.class);
+        TaskQueryStore taskStore = mock(TaskQueryStore.class);
         TaskAlertService alertService = mock(TaskAlertService.class);
         AlertProperties properties = new AlertProperties();
         properties.setEnabled(false);

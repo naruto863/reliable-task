@@ -6,7 +6,7 @@
 
     <groupId>com.reliabletask</groupId>
     <artifactId>reliable-task-root</artifactId>
-    <version>0.5.0</version>
+    <version>0.6.0</version>
     <packaging>pom</packaging>
 
     <name>ReliableTask Root</name>
@@ -18,6 +18,7 @@
         <module>reliable-task-executor</module>
         <module>reliable-task-admin</module>
         <module>reliable-task-spring-boot-starter</module>
+        <module>reliable-task-admin-spring-boot-starter</module>
         <module>reliable-task-demo</module>
     </modules>
 
@@ -68,6 +69,11 @@
             <dependency>
                 <groupId>com.reliabletask</groupId>
                 <artifactId>reliable-task-spring-boot-starter</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.reliabletask</groupId>
+                <artifactId>reliable-task-admin-spring-boot-starter</artifactId>
                 <version>${project.version}</version>
             </dependency>
 

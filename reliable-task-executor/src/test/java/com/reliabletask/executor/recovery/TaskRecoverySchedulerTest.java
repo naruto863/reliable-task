@@ -6,7 +6,7 @@ import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.model.TaskEvent;
 import com.reliabletask.core.model.TaskExecutionLease;
 import com.reliabletask.core.model.TaskInstance;
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskCommandStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,7 +29,7 @@ import static org.mockito.Mockito.*;
 class TaskRecoverySchedulerTest {
 
     @Mock
-    private TaskStore taskStore;
+    private TaskCommandStore taskStore;
 
     private RecoveryProperties properties;
     private TaskRecoveryScheduler scheduler;

@@ -8,13 +8,19 @@ import com.reliabletask.core.deadletter.TaskDeadLetterDispatcher;
 import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.spi.FailureClassifier;
 import com.reliabletask.core.spi.TaskDeadLetterHandler;
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskCommandStore;
 import com.reliabletask.core.spi.TaskEventListener;
+import com.reliabletask.core.spi.TaskOperationsStore;
+import com.reliabletask.core.spi.TaskQueryStore;
 import com.reliabletask.core.spi.TaskTemplate;
 import com.reliabletask.core.spi.IdempotencyStrategy;
 import com.reliabletask.core.spi.TaskAuditRecorder;
 import com.reliabletask.core.spi.TaskMetricsRecorder;
+import com.reliabletask.core.spi.TaskPayloadCodec;
+import com.reliabletask.core.spi.TaskPayloadCodecAdapters;
 import com.reliabletask.core.spi.TaskPayloadSerializer;
+import com.reliabletask.core.spi.TaskNameResolver;
+import com.reliabletask.core.spi.TaskTraceIdGenerator;
 import com.reliabletask.core.spi.RetryStrategy;
 import com.reliabletask.core.spi.WorkerHeartbeatReporter;
 import com.reliabletask.core.spi.noop.NoopAlarmNotifier;
@@ -30,7 +36,9 @@ import com.reliabletask.executor.alert.TaskAlertService;
 import com.reliabletask.executor.handler.TaskExecutor;
 import com.reliabletask.executor.handler.TaskHandlerAutoRegistrar;
 import com.reliabletask.executor.handler.TaskHandlerRegistry;
-import com.reliabletask.executor.interceptor.TaskExecutionInterceptor;
+import com.reliabletask.executor.interceptor.TaskInterceptor;
+import com.reliabletask.executor.interceptor.TaskInterceptorChain;
+import com.reliabletask.executor.interceptor.TraceTaskInterceptor;
 import com.reliabletask.executor.recovery.RecoveryProperties;
 import com.reliabletask.executor.retry.RetryEngine;
 import com.reliabletask.executor.retry.RetryProperties;
@@ -51,15 +59,19 @@ import com.reliabletask.core.strategy.ExponentialRetryStrategy;
 import com.reliabletask.core.strategy.FixedRetryStrategy;
 import com.reliabletask.core.strategy.RetryStrategyRegistry;
 import com.reliabletask.core.strategy.StrictUniqueIdempotencyStrategy;
+import com.reliabletask.core.handler.DefaultTaskNameResolver;
+import com.reliabletask.core.trace.DefaultTaskTraceIdGenerator;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
+import org.springframework.core.annotation.AnnotationAwareOrderComparator;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import io.micrometer.core.instrument.MeterRegistry;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -99,10 +111,13 @@ public class ReliableTaskExecutorAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(WorkerScheduler.class)
     @ConditionalOnProperty(prefix = "reliable-task.worker", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public WorkerScheduler workerScheduler(TaskStore taskStore, WorkerProperties workerProperties,
+    public WorkerScheduler workerScheduler(TaskCommandStore taskCommandStore,
+                                           TaskOperationsStore taskOperationsStore,
+                                           WorkerProperties workerProperties,
                                            TaskExecutor taskExecutor,
                                            TaskEventPublisher eventPublisher) {
-        return new WorkerScheduler(taskStore, workerProperties, taskExecutor, eventPublisher);
+        return new WorkerScheduler(taskCommandStore, taskOperationsStore, workerProperties,
+                taskExecutor, eventPublisher);
     }
 
     // ==================== 补偿恢复配置 ====================
@@ -122,7 +137,7 @@ public class ReliableTaskExecutorAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(TaskRecoveryScheduler.class)
     @ConditionalOnProperty(prefix = "reliable-task.recovery", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public TaskRecoveryScheduler taskRecoveryScheduler(TaskStore taskStore, RecoveryProperties recoveryProperties,
+    public TaskRecoveryScheduler taskRecoveryScheduler(TaskCommandStore taskStore, RecoveryProperties recoveryProperties,
                                                        TaskEventPublisher eventPublisher) {
         return new TaskRecoveryScheduler(taskStore, recoveryProperties, eventPublisher);
     }
@@ -183,7 +198,7 @@ public class ReliableTaskExecutorAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(RetryEngine.class)
-    public RetryEngine retryEngine(TaskStore taskStore,
+    public RetryEngine retryEngine(TaskCommandStore taskStore,
                                    TaskMetricsRecorder metricsRecorder,
                                    TaskAuditRecorder auditRecorder,
                                    TaskAlertService alertService,
@@ -264,7 +279,7 @@ public class ReliableTaskExecutorAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(TaskAlertScheduler.class)
     @ConditionalOnProperty(prefix = "reliable-task.alert", name = "enabled", havingValue = "true")
-    public TaskAlertScheduler taskAlertScheduler(TaskStore taskStore,
+    public TaskAlertScheduler taskAlertScheduler(TaskQueryStore taskStore,
                                                  AlertProperties alertProperties,
                                                  TaskAlertService alertService) {
         return new TaskAlertScheduler(taskStore, alertProperties, alertService);
@@ -279,12 +294,44 @@ public class ReliableTaskExecutorAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean(TaskPayloadCodec.class)
+    public TaskPayloadCodec taskPayloadCodec(TaskPayloadSerializer payloadSerializer) {
+        return TaskPayloadCodecAdapters.fromSerializer(payloadSerializer);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(TaskTraceIdGenerator.class)
+    public TaskTraceIdGenerator taskTraceIdGenerator() {
+        return new DefaultTaskTraceIdGenerator();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(TaskNameResolver.class)
+    public TaskNameResolver taskNameResolver() {
+        return new DefaultTaskNameResolver();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(TraceTaskInterceptor.class)
+    public TraceTaskInterceptor traceTaskInterceptor() {
+        return new TraceTaskInterceptor();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(TaskInterceptorChain.class)
+    public TaskInterceptorChain taskInterceptorChain(List<TaskInterceptor> taskInterceptors) {
+        List<TaskInterceptor> orderedInterceptors = new ArrayList<>(taskInterceptors);
+        AnnotationAwareOrderComparator.sort(orderedInterceptors);
+        return TaskInterceptorChain.of(orderedInterceptors);
+    }
+
+    @Bean
     @ConditionalOnMissingBean(TaskMetricsRecorder.class)
     @ConditionalOnClass(MeterRegistry.class)
     @ConditionalOnBean(MeterRegistry.class)
     @ConditionalOnProperty(prefix = "reliable-task.metrics", name = "enabled", havingValue = "true")
     public TaskMetricsRecorder micrometerTaskMetricsRecorder(MeterRegistry meterRegistry,
-                                                             TaskStore taskStore,
+                                                             TaskQueryStore taskStore,
                                                              TaskExecutorFactory executorFactory,
                                                              ReliableTaskProperties properties) {
         return new MicrometerTaskMetricsRecorder(meterRegistry, taskStore, executorFactory,
@@ -326,15 +373,17 @@ public class ReliableTaskExecutorAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(TaskHandlerAutoRegistrar.class)
-    public TaskHandlerAutoRegistrar taskHandlerAutoRegistrar(TaskHandlerRegistry registry) {
-        return new TaskHandlerAutoRegistrar(registry);
+    public TaskHandlerAutoRegistrar taskHandlerAutoRegistrar(TaskHandlerRegistry registry,
+                                                            TaskNameResolver taskNameResolver) {
+        return new TaskHandlerAutoRegistrar(registry, taskNameResolver);
     }
 
     @Bean
     @ConditionalOnMissingBean(TaskExecutor.class)
-    public TaskExecutor reliableTaskExecutor(TaskStore taskStore, TaskHandlerRegistry handlerRegistry,
+    public TaskExecutor reliableTaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
                                              TaskExecutorFactory executorFactory, RetryEngine retryEngine,
-                                             TaskPayloadSerializer payloadSerializer,
+                                             TaskInterceptorChain interceptorChain,
+                                             TaskPayloadCodec payloadCodec,
                                              WorkerProperties workerProperties,
                                              TaskMetricsRecorder metricsRecorder,
                                              TaskAuditRecorder auditRecorder,
@@ -342,7 +391,7 @@ public class ReliableTaskExecutorAutoConfiguration {
                                              TaskEventPublisher eventPublisher,
                                              TaskDeadLetterDispatcher deadLetterDispatcher) {
         return new TaskExecutor(taskStore, handlerRegistry, executorFactory, retryEngine,
-                new TaskExecutionInterceptor(), payloadSerializer, workerProperties,
+                interceptorChain, payloadCodec, workerProperties,
                 metricsRecorder, auditRecorder, alertService, eventPublisher, deadLetterDispatcher);
     }
 
@@ -362,13 +411,15 @@ public class ReliableTaskExecutorAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean(TaskTemplate.class)
-    public TaskTemplate taskTemplate(TaskStore taskStore,
+    public TaskTemplate taskTemplate(TaskCommandStore taskStore,
                                      List<IdempotencyStrategy> idempotencyStrategies,
                                      ReliableTaskProperties properties,
-                                     TaskPayloadSerializer payloadSerializer,
+                                     TaskPayloadCodec payloadCodec,
                                      TaskMetricsRecorder metricsRecorder,
-                                     TaskEventPublisher eventPublisher) {
+                                     TaskEventPublisher eventPublisher,
+                                     TaskTraceIdGenerator traceIdGenerator) {
         return new TransactionAwareTaskTemplate(taskStore, idempotencyStrategies,
-                properties.getIdempotency().getStrategy(), payloadSerializer, metricsRecorder, eventPublisher);
+                properties.getIdempotency().getStrategy(), payloadCodec, metricsRecorder, eventPublisher,
+                traceIdGenerator);
     }
 }

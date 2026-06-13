@@ -3,15 +3,20 @@ package com.reliabletask.executor.template;
 import com.reliabletask.core.enums.RetryStrategyType;
 import com.reliabletask.core.enums.TaskEventType;
 import com.reliabletask.core.enums.TaskStatus;
+import com.reliabletask.core.context.TraceContext;
 import com.reliabletask.core.event.TaskEventPublisher;
 import com.reliabletask.core.model.TaskEvent;
 import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.TaskSubmitRequest;
 import com.reliabletask.core.model.TaskSubmitResult;
 import com.reliabletask.core.spi.IdempotencyStrategy;
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskCommandStore;
+import com.reliabletask.core.spi.TaskPayloadCodec;
+import com.reliabletask.core.spi.TaskPayloadCodecContext;
+import com.reliabletask.core.spi.TaskTraceIdGenerator;
 import com.reliabletask.core.strategy.AllowAfterTerminalIdempotencyStrategy;
 import com.reliabletask.core.strategy.StrictUniqueIdempotencyStrategy;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -25,6 +30,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -35,7 +41,7 @@ import static org.mockito.Mockito.*;
 class TransactionAwareTaskTemplateTest {
 
     @Mock
-    private TaskStore taskStore;
+    private TaskCommandStore taskStore;
 
     private TransactionAwareTaskTemplate template;
 
@@ -55,6 +61,11 @@ class TransactionAwareTaskTemplateTest {
                 .retryStrategy(RetryStrategyType.EXPONENTIAL)
                 .retryIntervalMs(2000L)
                 .build();
+    }
+
+    @AfterEach
+    void tearDown() {
+        TraceContext.clear();
     }
 
     // ==================== submit without transaction ====================
@@ -88,6 +99,70 @@ class TransactionAwareTaskTemplateTest {
         assertTrue(result.isCreated());
         assertFalse(result.isExisting());
         assertEquals(StrictUniqueIdempotencyStrategy.NAME, result.getIdempotencyStrategy());
+    }
+
+    @Test
+    @DisplayName("submitForResult - 无 TraceContext 时自动生成 rt 前缀 traceId")
+    void submitForResult_withoutTraceContext_generatesRtTraceId() {
+        when(taskStore.save(any())).thenAnswer(invocation -> {
+            TaskInstance task = invocation.getArgument(0);
+            task.setId(2L);
+            return task;
+        });
+
+        template.submitForResult(validRequest);
+
+        ArgumentCaptor<TaskInstance> captor = ArgumentCaptor.forClass(TaskInstance.class);
+        verify(taskStore).save(captor.capture());
+        assertTrue(captor.getValue().getTraceId().startsWith("rt-"));
+        assertTrue(captor.getValue().getTraceId().length() <= 64);
+    }
+
+    @Test
+    @DisplayName("submitForResult - 有 TraceContext 时复用当前 traceId")
+    void submitForResult_withTraceContext_reusesCurrentTraceId() {
+        TraceContext.setTraceId("trace-current");
+        when(taskStore.save(any())).thenAnswer(invocation -> {
+            TaskInstance task = invocation.getArgument(0);
+            task.setId(3L);
+            return task;
+        });
+
+        template.submitForResult(validRequest);
+
+        ArgumentCaptor<TaskInstance> captor = ArgumentCaptor.forClass(TaskInstance.class);
+        verify(taskStore).save(captor.capture());
+        assertEquals("trace-current", captor.getValue().getTraceId());
+    }
+
+    @Test
+    @DisplayName("submitForResult - 自定义 traceId generator 可覆盖默认策略")
+    void submitForResult_customTraceIdGenerator_overridesDefaultStrategy() {
+        TaskPayloadCodec codec = new TaskPayloadCodec() {
+            @Override
+            public String encode(Object payload, TaskPayloadCodecContext context) {
+                return String.valueOf(payload);
+            }
+
+            @Override
+            public <T> T decode(String payload, Class<T> targetType, TaskPayloadCodecContext context) {
+                return targetType.cast(payload);
+            }
+        };
+        TaskTraceIdGenerator generator = request -> "custom-" + request.getBizId();
+        template = new TransactionAwareTaskTemplate(taskStore, List.of(new StrictUniqueIdempotencyStrategy()),
+                StrictUniqueIdempotencyStrategy.NAME, codec, null, null, generator);
+        when(taskStore.save(any())).thenAnswer(invocation -> {
+            TaskInstance task = invocation.getArgument(0);
+            task.setId(4L);
+            return task;
+        });
+
+        template.submitForResult(validRequest);
+
+        ArgumentCaptor<TaskInstance> captor = ArgumentCaptor.forClass(TaskInstance.class);
+        verify(taskStore).save(captor.capture());
+        assertEquals("custom-ORD-001", captor.getValue().getTraceId());
     }
 
     @Test
@@ -278,6 +353,54 @@ class TransactionAwareTaskTemplateTest {
         ArgumentCaptor<TaskInstance> captor = ArgumentCaptor.forClass(TaskInstance.class);
         verify(taskStore).save(captor.capture());
         assertEquals("{\"orderId\":\"ORD-JSON-002\",\"quantity\":5}", captor.getValue().getPayload());
+    }
+
+    @Test
+    @DisplayName("submit - 自定义 codec 接收入库上下文")
+    void submit_customPayloadCodec_receivesSubmissionContext() {
+        AtomicReference<TaskPayloadCodecContext> contextRef = new AtomicReference<>();
+        TaskPayloadCodec codec = new TaskPayloadCodec() {
+            @Override
+            public String encode(Object payload, TaskPayloadCodecContext context) {
+                contextRef.set(context);
+                return "codec:" + context.getTaskType() + ":" + payload;
+            }
+
+            @Override
+            public <T> T decode(String payload, Class<T> targetType, TaskPayloadCodecContext context) {
+                throw new UnsupportedOperationException("decode is not used by submit");
+            }
+        };
+        template = new TransactionAwareTaskTemplate(taskStore, List.of(new StrictUniqueIdempotencyStrategy()),
+                StrictUniqueIdempotencyStrategy.NAME, codec);
+        TaskSubmitRequest request = TaskSubmitRequest.builder()
+                .taskType("CREATE_SHIPMENT")
+                .bizType("ORDER")
+                .bizId("ORD-CODEC-001")
+                .tenantId("tenant-a")
+                .shardKey("shard-1")
+                .payloadObject(new ShipmentPayload("ORD-CODEC-001", 7))
+                .build();
+        when(taskStore.save(any())).thenAnswer(invocation -> {
+            TaskInstance task = invocation.getArgument(0);
+            task.setId(12L);
+            return task;
+        });
+
+        String result = template.submit(request);
+
+        assertEquals("12", result);
+        ArgumentCaptor<TaskInstance> captor = ArgumentCaptor.forClass(TaskInstance.class);
+        verify(taskStore).save(captor.capture());
+        assertEquals("codec:CREATE_SHIPMENT:ShipmentPayload[orderId=ORD-CODEC-001, quantity=7]",
+                captor.getValue().getPayload());
+        assertEquals(TaskPayloadCodecContext.Operation.ENCODE, contextRef.get().getOperation());
+        assertEquals("CREATE_SHIPMENT", contextRef.get().getTaskType());
+        assertEquals("ORDER", contextRef.get().getBizType());
+        assertEquals("ORD-CODEC-001", contextRef.get().getBizId());
+        assertEquals("tenant-a", contextRef.get().getTenantId());
+        assertEquals("shard-1", contextRef.get().getShardKey());
+        assertEquals(ShipmentPayload.class, contextRef.get().getTargetType());
     }
 
     // ==================== submit with transaction ====================

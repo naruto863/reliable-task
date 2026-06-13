@@ -1,6 +1,5 @@
 package com.reliabletask.executor.template;
 
-import com.reliabletask.core.context.TraceContext;
 import com.reliabletask.core.enums.TaskEventType;
 import com.reliabletask.core.enums.TaskStatus;
 import com.reliabletask.core.event.TaskEventPublisher;
@@ -13,10 +12,15 @@ import com.reliabletask.core.model.TaskSubmitRequest;
 import com.reliabletask.core.model.TaskSubmitResult;
 import com.reliabletask.core.spi.IdempotencyStrategy;
 import com.reliabletask.core.spi.TaskMetricsRecorder;
+import com.reliabletask.core.spi.TaskPayloadCodec;
+import com.reliabletask.core.spi.TaskPayloadCodecAdapters;
+import com.reliabletask.core.spi.TaskPayloadCodecContext;
 import com.reliabletask.core.spi.TaskPayloadSerializer;
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskCommandStore;
 import com.reliabletask.core.spi.TaskTemplate;
+import com.reliabletask.core.spi.TaskTraceIdGenerator;
 import com.reliabletask.core.spi.noop.NoopTaskMetricsRecorder;
+import com.reliabletask.core.trace.DefaultTaskTraceIdGenerator;
 import lombok.extern.slf4j.Slf4j;
 import com.reliabletask.core.strategy.StrictUniqueIdempotencyStrategy;
 import com.reliabletask.executor.serializer.JacksonTaskPayloadSerializer;
@@ -38,55 +42,95 @@ import java.util.Map;
  * <p>状态流转说明:
  * <pre>
  *   业务调用 submit() → 构建 TaskInstance(status=PENDING)
- *   → TaskStore.save() → PENDING 状态入库
+ *   → TaskCommandStore.save() → PENDING 状态入库
  * </pre>
  */
 @Slf4j
 public class TransactionAwareTaskTemplate implements TaskTemplate {
 
     private static final int MAX_BIZ_UNIQUE_KEY_LENGTH = 256;
+    private static final int MAX_TRACE_ID_LENGTH = 64;
 
-    private final TaskStore taskStore;
+    private final TaskCommandStore taskStore;
     private final Map<String, IdempotencyStrategy> idempotencyStrategies;
     private final String defaultIdempotencyStrategyName;
-    private final TaskPayloadSerializer payloadSerializer;
+    private final TaskPayloadCodec payloadCodec;
     private final TaskMetricsRecorder metricsRecorder;
     private final TaskEventPublisher eventPublisher;
+    private final TaskTraceIdGenerator traceIdGenerator;
 
-    public TransactionAwareTaskTemplate(TaskStore taskStore) {
+    public TransactionAwareTaskTemplate(TaskCommandStore taskStore) {
         this(taskStore, List.of(new StrictUniqueIdempotencyStrategy()), StrictUniqueIdempotencyStrategy.NAME,
                 new JacksonTaskPayloadSerializer());
     }
 
-    public TransactionAwareTaskTemplate(TaskStore taskStore,
+    public TransactionAwareTaskTemplate(TaskCommandStore taskStore,
                                         List<IdempotencyStrategy> idempotencyStrategies,
                                         String defaultIdempotencyStrategyName) {
         this(taskStore, idempotencyStrategies, defaultIdempotencyStrategyName, new JacksonTaskPayloadSerializer());
     }
 
-    public TransactionAwareTaskTemplate(TaskStore taskStore,
+    public TransactionAwareTaskTemplate(TaskCommandStore taskStore,
                                         List<IdempotencyStrategy> idempotencyStrategies,
                                         String defaultIdempotencyStrategyName,
                                         TaskPayloadSerializer payloadSerializer) {
         this(taskStore, idempotencyStrategies, defaultIdempotencyStrategyName,
-                payloadSerializer, new NoopTaskMetricsRecorder());
+                toCodec(payloadSerializer), new NoopTaskMetricsRecorder());
     }
 
-    public TransactionAwareTaskTemplate(TaskStore taskStore,
+    public TransactionAwareTaskTemplate(TaskCommandStore taskStore,
+                                        List<IdempotencyStrategy> idempotencyStrategies,
+                                        String defaultIdempotencyStrategyName,
+                                        TaskPayloadCodec payloadCodec) {
+        this(taskStore, idempotencyStrategies, defaultIdempotencyStrategyName,
+                payloadCodec, new NoopTaskMetricsRecorder());
+    }
+
+    public TransactionAwareTaskTemplate(TaskCommandStore taskStore,
                                         List<IdempotencyStrategy> idempotencyStrategies,
                                         String defaultIdempotencyStrategyName,
                                         TaskPayloadSerializer payloadSerializer,
                                         TaskMetricsRecorder metricsRecorder) {
         this(taskStore, idempotencyStrategies, defaultIdempotencyStrategyName,
-                payloadSerializer, metricsRecorder, new TaskEventPublisher());
+                toCodec(payloadSerializer), metricsRecorder, new TaskEventPublisher());
     }
 
-    public TransactionAwareTaskTemplate(TaskStore taskStore,
+    public TransactionAwareTaskTemplate(TaskCommandStore taskStore,
+                                        List<IdempotencyStrategy> idempotencyStrategies,
+                                        String defaultIdempotencyStrategyName,
+                                        TaskPayloadCodec payloadCodec,
+                                        TaskMetricsRecorder metricsRecorder) {
+        this(taskStore, idempotencyStrategies, defaultIdempotencyStrategyName,
+                payloadCodec, metricsRecorder, new TaskEventPublisher());
+    }
+
+    public TransactionAwareTaskTemplate(TaskCommandStore taskStore,
                                         List<IdempotencyStrategy> idempotencyStrategies,
                                         String defaultIdempotencyStrategyName,
                                         TaskPayloadSerializer payloadSerializer,
                                         TaskMetricsRecorder metricsRecorder,
                                         TaskEventPublisher eventPublisher) {
+        this(taskStore, idempotencyStrategies, defaultIdempotencyStrategyName,
+                toCodec(payloadSerializer), metricsRecorder, eventPublisher);
+    }
+
+    public TransactionAwareTaskTemplate(TaskCommandStore taskStore,
+                                        List<IdempotencyStrategy> idempotencyStrategies,
+                                        String defaultIdempotencyStrategyName,
+                                        TaskPayloadCodec payloadCodec,
+                                        TaskMetricsRecorder metricsRecorder,
+                                        TaskEventPublisher eventPublisher) {
+        this(taskStore, idempotencyStrategies, defaultIdempotencyStrategyName,
+                payloadCodec, metricsRecorder, eventPublisher, new DefaultTaskTraceIdGenerator());
+    }
+
+    public TransactionAwareTaskTemplate(TaskCommandStore taskStore,
+                                        List<IdempotencyStrategy> idempotencyStrategies,
+                                        String defaultIdempotencyStrategyName,
+                                        TaskPayloadCodec payloadCodec,
+                                        TaskMetricsRecorder metricsRecorder,
+                                        TaskEventPublisher eventPublisher,
+                                        TaskTraceIdGenerator traceIdGenerator) {
         this.taskStore = taskStore;
         this.idempotencyStrategies = new HashMap<>();
         if (idempotencyStrategies != null) {
@@ -95,9 +139,10 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
             }
         }
         this.defaultIdempotencyStrategyName = defaultIdempotencyStrategyName;
-        this.payloadSerializer = payloadSerializer != null ? payloadSerializer : new JacksonTaskPayloadSerializer();
+        this.payloadCodec = payloadCodec != null ? payloadCodec : defaultCodec();
         this.metricsRecorder = metricsRecorder != null ? metricsRecorder : new NoopTaskMetricsRecorder();
         this.eventPublisher = eventPublisher != null ? eventPublisher : new TaskEventPublisher();
+        this.traceIdGenerator = traceIdGenerator != null ? traceIdGenerator : new DefaultTaskTraceIdGenerator();
     }
 
     @Override
@@ -152,11 +197,12 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
     /**
      * 执行实际的任务保存操作
      *
-     * <p>构建 TaskInstance 并调用 TaskStore.save() 持久化。
-     * TaskStore.save() 内部已处理 bizUniqueKey 幂等。
+     * <p>构建 TaskInstance 并调用 TaskCommandStore.save() 持久化。
+     * TaskCommandStore.save() 内部已处理 bizUniqueKey 幂等。
      */
     private TaskSubmitResult doSubmit(TaskSubmitRequest request, LocalDateTime executeTime, Object payloadOverride) {
-        String serializedPayload = serializePayload(request, payloadOverride);
+        String traceId = resolveTraceId(request);
+        String serializedPayload = serializePayload(request, payloadOverride, traceId);
         String idempotencyKey = normalizeIdempotencyKey(request.getIdempotencyKey());
         String baseBizUniqueKey = resolveBizUniqueKey(request, idempotencyKey);
         String strategyName = resolveStrategyName(request);
@@ -175,7 +221,7 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
 
         if (decision.getAction() == IdempotencyDecision.Action.RETURN_EXISTING) {
             log.info("Task submit hit idempotency: taskType={}, bizId={}, strategy={}, traceId={}, existingTaskId={}",
-                    request.getTaskType(), request.getBizId(), strategyName, TraceContext.getTraceId(),
+                    request.getTaskType(), request.getBizId(), strategyName, traceId,
                     decision.getExistingTaskId());
             return TaskSubmitResult.builder()
                     .taskId(decision.getExistingTaskId())
@@ -197,7 +243,7 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
                 ? decision.getBizUniqueKey()
                 : baseBizUniqueKey;
         validateBizUniqueKeyLength(effectiveBizUniqueKey);
-        TaskInstance task = buildTaskInstance(request, executeTime, effectiveBizUniqueKey, serializedPayload);
+        TaskInstance task = buildTaskInstance(request, executeTime, effectiveBizUniqueKey, serializedPayload, traceId);
         TaskInstance saved = taskStore.save(task);
         recordSubmitted(saved);
         eventPublisher.publish(TaskEvent.of(TaskEventType.SUBMITTED, saved,
@@ -220,7 +266,7 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
      * 从 TaskSubmitRequest 构建 TaskInstance 领域对象
      */
     private TaskInstance buildTaskInstance(TaskSubmitRequest request, LocalDateTime nextExecuteTime,
-                                           String bizUniqueKey, String serializedPayload) {
+                                           String bizUniqueKey, String serializedPayload, String traceId) {
         return TaskInstance.builder()
                 .taskType(request.getTaskType())
                 .bizType(request.getBizType())
@@ -236,7 +282,7 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
                 .nextExecuteTime(nextExecuteTime)
                 .shardKey(request.getShardKey())
                 .tenantId(request.getTenantId())
-                .traceId(TraceContext.getTraceId())
+                .traceId(traceId)
                 .build();
     }
 
@@ -290,15 +336,45 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
         }
     }
 
-    private String serializePayload(TaskSubmitRequest request, Object payloadOverride) {
+    private String serializePayload(TaskSubmitRequest request, Object payloadOverride, String traceId) {
         Object payload = payloadOverride != null
                 ? payloadOverride
                 : request.getPayloadObject() != null ? request.getPayloadObject() : request.getPayload();
-        String serializedPayload = payloadSerializer.serialize(payload);
+        TaskPayloadCodecContext context = TaskPayloadCodecContext.builder()
+                .operation(TaskPayloadCodecContext.Operation.ENCODE)
+                .taskType(request.getTaskType())
+                .bizType(request.getBizType())
+                .bizId(request.getBizId())
+                .tenantId(request.getTenantId())
+                .shardKey(request.getShardKey())
+                .traceId(traceId)
+                .targetType(payload == null ? null : payload.getClass())
+                .build();
+        String serializedPayload = payloadCodec.encode(payload, context);
         if (serializedPayload == null) {
             throw new IllegalArgumentException("payload must not be null");
         }
         return serializedPayload;
+    }
+
+    private String resolveTraceId(TaskSubmitRequest request) {
+        String traceId = traceIdGenerator.generate(request);
+        if (traceId == null || traceId.isBlank()) {
+            traceId = new DefaultTaskTraceIdGenerator().generate(request);
+        }
+        if (traceId.length() > MAX_TRACE_ID_LENGTH) {
+            throw new IllegalArgumentException("traceId length must not exceed " + MAX_TRACE_ID_LENGTH);
+        }
+        return traceId;
+    }
+
+    private static TaskPayloadCodec toCodec(TaskPayloadSerializer payloadSerializer) {
+        return TaskPayloadCodecAdapters.fromSerializer(
+                payloadSerializer != null ? payloadSerializer : new JacksonTaskPayloadSerializer());
+    }
+
+    private static TaskPayloadCodec defaultCodec() {
+        return TaskPayloadCodecAdapters.fromSerializer(new JacksonTaskPayloadSerializer());
     }
 
     /**

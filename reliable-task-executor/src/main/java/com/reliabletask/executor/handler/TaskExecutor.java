@@ -13,13 +13,18 @@ import com.reliabletask.core.model.TaskExecutionMetricsEvent;
 import com.reliabletask.core.spi.TaskAuditRecorder;
 import com.reliabletask.core.spi.TaskHandler;
 import com.reliabletask.core.spi.TaskMetricsRecorder;
+import com.reliabletask.core.spi.TaskPayloadCodec;
+import com.reliabletask.core.spi.TaskPayloadCodecAdapters;
+import com.reliabletask.core.spi.TaskPayloadCodecContext;
 import com.reliabletask.core.spi.TaskPayloadSerializer;
-import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.spi.TaskCommandStore;
 import com.reliabletask.core.spi.noop.NoopTaskAuditRecorder;
 import com.reliabletask.core.spi.noop.NoopTaskMetricsRecorder;
 import com.reliabletask.executor.alert.NoopTaskAlertService;
 import com.reliabletask.executor.alert.TaskAlertService;
+import com.reliabletask.executor.interceptor.TaskExecutionContext;
 import com.reliabletask.executor.interceptor.TaskExecutionInterceptor;
+import com.reliabletask.executor.interceptor.TaskInterceptorChain;
 import com.reliabletask.executor.retry.RetryEngine;
 import com.reliabletask.executor.serializer.JacksonTaskPayloadSerializer;
 import com.reliabletask.executor.threadpool.TaskExecutorFactory;
@@ -28,6 +33,7 @@ import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.concurrent.*;
 
 /**
@@ -52,12 +58,12 @@ import java.util.concurrent.*;
 @Slf4j
 public class TaskExecutor {
 
-    private final TaskStore taskStore;
+    private final TaskCommandStore taskStore;
     private final TaskHandlerRegistry handlerRegistry;
     private final TaskExecutorFactory executorFactory;
     private final RetryEngine retryEngine;
-    private final TaskExecutionInterceptor interceptor;
-    private final TaskPayloadSerializer payloadSerializer;
+    private final TaskInterceptorChain interceptorChain;
+    private final TaskPayloadCodec payloadCodec;
     private final WorkerProperties workerProperties;
     private final TaskMetricsRecorder metricsRecorder;
     private final TaskAuditRecorder auditRecorder;
@@ -67,43 +73,116 @@ public class TaskExecutor {
     private final ScheduledExecutorService leaseRenewalExecutor;
     private final ConcurrentMap<String, Semaphore> concurrencyLimiters = new ConcurrentHashMap<>();
 
-    public TaskExecutor(TaskStore taskStore, TaskHandlerRegistry handlerRegistry,
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
                         TaskExecutorFactory executorFactory, RetryEngine retryEngine,
                         TaskExecutionInterceptor interceptor) {
         this(taskStore, handlerRegistry, executorFactory, retryEngine,
-                interceptor, new JacksonTaskPayloadSerializer());
+                toChain(interceptor), new JacksonTaskPayloadSerializer());
     }
 
-    public TaskExecutor(TaskStore taskStore, TaskHandlerRegistry handlerRegistry,
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskInterceptorChain interceptorChain) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine,
+                interceptorChain, new JacksonTaskPayloadSerializer());
+    }
+
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
                         TaskExecutorFactory executorFactory, RetryEngine retryEngine,
                         TaskExecutionInterceptor interceptor,
                         TaskPayloadSerializer payloadSerializer) {
         this(taskStore, handlerRegistry, executorFactory, retryEngine,
-                interceptor, payloadSerializer, new WorkerProperties());
+                toChain(interceptor), toCodec(payloadSerializer), new WorkerProperties());
     }
 
-    public TaskExecutor(TaskStore taskStore, TaskHandlerRegistry handlerRegistry,
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskInterceptorChain interceptorChain,
+                        TaskPayloadSerializer payloadSerializer) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine,
+                interceptorChain, toCodec(payloadSerializer), new WorkerProperties());
+    }
+
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskExecutionInterceptor interceptor,
+                        TaskPayloadCodec payloadCodec) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine,
+                toChain(interceptor), payloadCodec, new WorkerProperties());
+    }
+
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskInterceptorChain interceptorChain,
+                        TaskPayloadCodec payloadCodec) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine,
+                interceptorChain, payloadCodec, new WorkerProperties());
+    }
+
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
                         TaskExecutorFactory executorFactory, RetryEngine retryEngine,
                         TaskExecutionInterceptor interceptor,
                         TaskPayloadSerializer payloadSerializer,
                         WorkerProperties workerProperties) {
-        this(taskStore, handlerRegistry, executorFactory, retryEngine, interceptor,
-                payloadSerializer, workerProperties, new NoopTaskMetricsRecorder(), new NoopTaskAuditRecorder());
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, toChain(interceptor),
+                toCodec(payloadSerializer), workerProperties, new NoopTaskMetricsRecorder(), new NoopTaskAuditRecorder());
     }
 
-    public TaskExecutor(TaskStore taskStore, TaskHandlerRegistry handlerRegistry,
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskExecutionInterceptor interceptor,
+                        TaskPayloadCodec payloadCodec,
+                        WorkerProperties workerProperties) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, toChain(interceptor),
+                payloadCodec, workerProperties, new NoopTaskMetricsRecorder(), new NoopTaskAuditRecorder());
+    }
+
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskInterceptorChain interceptorChain,
+                        TaskPayloadCodec payloadCodec,
+                        WorkerProperties workerProperties) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, interceptorChain,
+                payloadCodec, workerProperties, new NoopTaskMetricsRecorder(), new NoopTaskAuditRecorder());
+    }
+
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
                         TaskExecutorFactory executorFactory, RetryEngine retryEngine,
                         TaskExecutionInterceptor interceptor,
                         TaskPayloadSerializer payloadSerializer,
                         WorkerProperties workerProperties,
                         TaskMetricsRecorder metricsRecorder,
                         TaskAuditRecorder auditRecorder) {
-        this(taskStore, handlerRegistry, executorFactory, retryEngine, interceptor,
-                payloadSerializer, workerProperties, metricsRecorder, auditRecorder,
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, toChain(interceptor),
+                toCodec(payloadSerializer), workerProperties, metricsRecorder, auditRecorder,
                 new NoopTaskAlertService());
     }
 
-    public TaskExecutor(TaskStore taskStore, TaskHandlerRegistry handlerRegistry,
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskExecutionInterceptor interceptor,
+                        TaskPayloadCodec payloadCodec,
+                        WorkerProperties workerProperties,
+                        TaskMetricsRecorder metricsRecorder,
+                        TaskAuditRecorder auditRecorder) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, toChain(interceptor),
+                payloadCodec, workerProperties, metricsRecorder, auditRecorder,
+                new NoopTaskAlertService());
+    }
+
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskInterceptorChain interceptorChain,
+                        TaskPayloadCodec payloadCodec,
+                        WorkerProperties workerProperties,
+                        TaskMetricsRecorder metricsRecorder,
+                        TaskAuditRecorder auditRecorder) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, interceptorChain,
+                payloadCodec, workerProperties, metricsRecorder, auditRecorder,
+                new NoopTaskAlertService());
+    }
+
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
                         TaskExecutorFactory executorFactory, RetryEngine retryEngine,
                         TaskExecutionInterceptor interceptor,
                         TaskPayloadSerializer payloadSerializer,
@@ -111,12 +190,38 @@ public class TaskExecutor {
                         TaskMetricsRecorder metricsRecorder,
                         TaskAuditRecorder auditRecorder,
                         TaskAlertService alertService) {
-        this(taskStore, handlerRegistry, executorFactory, retryEngine, interceptor,
-                payloadSerializer, workerProperties, metricsRecorder, auditRecorder,
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, toChain(interceptor),
+                toCodec(payloadSerializer), workerProperties, metricsRecorder, auditRecorder,
                 alertService, new TaskEventPublisher());
     }
 
-    public TaskExecutor(TaskStore taskStore, TaskHandlerRegistry handlerRegistry,
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskExecutionInterceptor interceptor,
+                        TaskPayloadCodec payloadCodec,
+                        WorkerProperties workerProperties,
+                        TaskMetricsRecorder metricsRecorder,
+                        TaskAuditRecorder auditRecorder,
+                        TaskAlertService alertService) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, toChain(interceptor),
+                payloadCodec, workerProperties, metricsRecorder, auditRecorder,
+                alertService, new TaskEventPublisher());
+    }
+
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskInterceptorChain interceptorChain,
+                        TaskPayloadCodec payloadCodec,
+                        WorkerProperties workerProperties,
+                        TaskMetricsRecorder metricsRecorder,
+                        TaskAuditRecorder auditRecorder,
+                        TaskAlertService alertService) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, interceptorChain,
+                payloadCodec, workerProperties, metricsRecorder, auditRecorder,
+                alertService, new TaskEventPublisher());
+    }
+
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
                         TaskExecutorFactory executorFactory, RetryEngine retryEngine,
                         TaskExecutionInterceptor interceptor,
                         TaskPayloadSerializer payloadSerializer,
@@ -125,15 +230,73 @@ public class TaskExecutor {
                         TaskAuditRecorder auditRecorder,
                         TaskAlertService alertService,
                         TaskEventPublisher eventPublisher) {
-        this(taskStore, handlerRegistry, executorFactory, retryEngine, interceptor,
-                payloadSerializer, workerProperties, metricsRecorder, auditRecorder,
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, toChain(interceptor),
+                toCodec(payloadSerializer), workerProperties, metricsRecorder, auditRecorder,
                 alertService, eventPublisher, new TaskDeadLetterDispatcher());
     }
 
-    public TaskExecutor(TaskStore taskStore, TaskHandlerRegistry handlerRegistry,
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskExecutionInterceptor interceptor,
+                        TaskPayloadCodec payloadCodec,
+                        WorkerProperties workerProperties,
+                        TaskMetricsRecorder metricsRecorder,
+                        TaskAuditRecorder auditRecorder,
+                        TaskAlertService alertService,
+                        TaskEventPublisher eventPublisher) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, toChain(interceptor),
+                payloadCodec, workerProperties, metricsRecorder, auditRecorder,
+                alertService, eventPublisher, new TaskDeadLetterDispatcher());
+    }
+
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskInterceptorChain interceptorChain,
+                        TaskPayloadCodec payloadCodec,
+                        WorkerProperties workerProperties,
+                        TaskMetricsRecorder metricsRecorder,
+                        TaskAuditRecorder auditRecorder,
+                        TaskAlertService alertService,
+                        TaskEventPublisher eventPublisher) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, interceptorChain,
+                payloadCodec, workerProperties, metricsRecorder, auditRecorder,
+                alertService, eventPublisher, new TaskDeadLetterDispatcher());
+    }
+
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
                         TaskExecutorFactory executorFactory, RetryEngine retryEngine,
                         TaskExecutionInterceptor interceptor,
                         TaskPayloadSerializer payloadSerializer,
+                        WorkerProperties workerProperties,
+                        TaskMetricsRecorder metricsRecorder,
+                        TaskAuditRecorder auditRecorder,
+                        TaskAlertService alertService,
+                        TaskEventPublisher eventPublisher,
+                        TaskDeadLetterDispatcher deadLetterDispatcher) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, toChain(interceptor),
+                toCodec(payloadSerializer), workerProperties, metricsRecorder, auditRecorder,
+                alertService, eventPublisher, deadLetterDispatcher);
+    }
+
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskExecutionInterceptor interceptor,
+                        TaskPayloadCodec payloadCodec,
+                        WorkerProperties workerProperties,
+                        TaskMetricsRecorder metricsRecorder,
+                        TaskAuditRecorder auditRecorder,
+                        TaskAlertService alertService,
+                        TaskEventPublisher eventPublisher,
+                        TaskDeadLetterDispatcher deadLetterDispatcher) {
+        this(taskStore, handlerRegistry, executorFactory, retryEngine, toChain(interceptor),
+                payloadCodec, workerProperties, metricsRecorder, auditRecorder,
+                alertService, eventPublisher, deadLetterDispatcher);
+    }
+
+    public TaskExecutor(TaskCommandStore taskStore, TaskHandlerRegistry handlerRegistry,
+                        TaskExecutorFactory executorFactory, RetryEngine retryEngine,
+                        TaskInterceptorChain interceptorChain,
+                        TaskPayloadCodec payloadCodec,
                         WorkerProperties workerProperties,
                         TaskMetricsRecorder metricsRecorder,
                         TaskAuditRecorder auditRecorder,
@@ -144,8 +307,8 @@ public class TaskExecutor {
         this.handlerRegistry = handlerRegistry;
         this.executorFactory = executorFactory;
         this.retryEngine = retryEngine;
-        this.interceptor = interceptor;
-        this.payloadSerializer = payloadSerializer;
+        this.interceptorChain = interceptorChain != null ? interceptorChain : toChain(new TaskExecutionInterceptor());
+        this.payloadCodec = payloadCodec != null ? payloadCodec : defaultCodec();
         this.workerProperties = workerProperties != null ? workerProperties : new WorkerProperties();
         this.metricsRecorder = metricsRecorder != null ? metricsRecorder : new NoopTaskMetricsRecorder();
         this.auditRecorder = auditRecorder != null ? auditRecorder : new NoopTaskAuditRecorder();
@@ -170,13 +333,15 @@ public class TaskExecutor {
      */
     public void execute(TaskInstance task) {
         // 执行调度线程前: 设置 traceId 到 MDC，保证调度日志可追踪。
-        interceptor.beforeExecute(task);
+        TaskExecutionContext context = TaskExecutionContext.from(task);
+        interceptorChain.beforeExecute(context);
 
         try {
             TaskHandler handler;
             try {
                 handler = handlerRegistry.getHandler(task.getTaskType());
             } catch (IllegalArgumentException e) {
+                interceptorChain.onError(context, e);
                 log.error("No handler found for task: id={}, type={}", task.getId(), task.getTaskType());
                 if (!markDead(task, "NO_HANDLER", e.getMessage())) {
                     log.warn("Skip no-handler DEAD log because lease CAS failed: id={}, workerId={}, version={}",
@@ -205,7 +370,8 @@ public class TaskExecutor {
                 try {
                     ExecutorService executor = executorFactory.getExecutor(task.getTaskType());
                     future = executor.submit(() -> {
-                        interceptor.beforeExecute(task);
+                        TaskExecutionContext workerContext = TaskExecutionContext.from(task);
+                        interceptorChain.beforeExecute(workerContext);
                         Semaphore limiter = resolveConcurrencyLimiter(taskHandler);
                         boolean acquired = false;
                         try {
@@ -217,18 +383,21 @@ public class TaskExecutor {
                             taskHandler.execute(task, typedPayload);
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
+                            interceptorChain.onError(workerContext, e);
                             throw new CompletionException(e);
                         } catch (Exception e) {
+                            interceptorChain.onError(workerContext, e);
                             throw new CompletionException(e);
                         } finally {
                             if (acquired) {
                                 limiter.release();
                             }
-                            interceptor.afterExecute();
+                            interceptorChain.afterExecute(workerContext);
                         }
                     });
                 } catch (RuntimeException e) {
                     long durationMs = System.currentTimeMillis() - startTime;
+                    interceptorChain.onError(context, e);
                     retryEngine.handleFailure(handler, task, e, durationMs, statusBefore.name());
                     return;
                 }
@@ -261,19 +430,21 @@ public class TaskExecutor {
 
             } catch (TimeoutException e) {
                 long durationMs = System.currentTimeMillis() - startTime;
-                retryEngine.handleFailure(handler, task, new RuntimeException(
-                        "Execution timeout after " + timeoutMs + "ms"), durationMs, statusBefore.name());
+                RuntimeException timeout = new RuntimeException("Execution timeout after " + timeoutMs + "ms");
+                interceptorChain.onError(context, timeout);
+                retryEngine.handleFailure(handler, task, timeout, durationMs, statusBefore.name());
             } catch (ExecutionException e) {
                 long durationMs = System.currentTimeMillis() - startTime;
                 retryEngine.handleFailure(handler, task, e, durationMs, statusBefore.name());
             } catch (InterruptedException e) {
                 long durationMs = System.currentTimeMillis() - startTime;
                 Thread.currentThread().interrupt();
+                interceptorChain.onError(context, e);
                 retryEngine.handleFailure(handler, task, e, durationMs, statusBefore.name());
             }
         } finally {
             // 执行调度线程后: 清理 MDC，防止线程复用导致 traceId 泄漏。
-            interceptor.afterExecute();
+            interceptorChain.afterExecute(context);
         }
     }
 
@@ -295,7 +466,36 @@ public class TaskExecutor {
         if (payloadType == null || payloadType == String.class) {
             return task.getPayload();
         }
-        return payloadSerializer.deserialize(task.getPayload(), payloadType);
+        TaskPayloadCodecContext context = TaskPayloadCodecContext.builder()
+                .operation(TaskPayloadCodecContext.Operation.DECODE)
+                .taskId(task.getId())
+                .taskType(task.getTaskType())
+                .bizType(task.getBizType())
+                .bizId(task.getBizId())
+                .tenantId(task.getTenantId())
+                .shardKey(task.getShardKey())
+                .traceId(task.getTraceId())
+                .targetType(payloadType)
+                .build();
+        return decodePayload(task.getPayload(), payloadType, context);
+    }
+
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private Object decodePayload(String payload, Class<?> payloadType, TaskPayloadCodecContext context) {
+        return payloadCodec.decode(payload, (Class) payloadType, context);
+    }
+
+    private static TaskPayloadCodec toCodec(TaskPayloadSerializer payloadSerializer) {
+        return TaskPayloadCodecAdapters.fromSerializer(
+                payloadSerializer != null ? payloadSerializer : new JacksonTaskPayloadSerializer());
+    }
+
+    private static TaskPayloadCodec defaultCodec() {
+        return TaskPayloadCodecAdapters.fromSerializer(new JacksonTaskPayloadSerializer());
+    }
+
+    private static TaskInterceptorChain toChain(TaskExecutionInterceptor interceptor) {
+        return TaskInterceptorChain.of(List.of(interceptor != null ? interceptor : new TaskExecutionInterceptor()));
     }
 
     private Semaphore resolveConcurrencyLimiter(TaskHandler taskHandler) {

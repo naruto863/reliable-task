@@ -31,8 +31,10 @@
 - [ ] 如果 Docker/Testcontainers 或本地 MySQL 环境不可用，必须在发布记录中单独写明阻塞证据和未验证范围，不能把跳过的集成测试写成通过。
 - [ ] 更新或引用 `docs/review/RELIABLE_TASK_V03_V04_READINESS_REPORT.md`，确认 release notes 中的验证状态与 readiness 事实一致。
 - [ ] 对 v0.5.x 及后续生产运维版本，更新或引用 `docs/review/RELIABLE_TASK_V05_READINESS_REPORT.md`，确认 Admin 运维查询、dead letter SPI、监控 runbook 和 MySQL 验证状态与 release notes 一致。
+- [ ] 对 v0.6.x 及后续 SPI/模块边界版本，更新或引用 `docs/review/RELIABLE_TASK_V06_READINESS_REPORT.md`，确认 Store 窄接口、payload codec、interceptor chain、trace/name/metadata SPI、Worker/Admin starter 拆分、migration 脚本和验证状态与 release notes 一致。
 - [ ] 确认 README 快速开始、Demo 文档和安全说明与当前版本一致。
 - [ ] 确认 README、中文 README 和 Demo 文档同步说明 v0.5 Admin 运维查询、dead letter SPI、生产默认值和本地 Demo opt-in 差异。
+- [ ] 确认 README、中文 README 和 Demo 文档同步说明 v0.6 Worker-only starter、Admin starter opt-in、schema.sql/Flyway/Liquibase 三选一初始化，以及 Store/payload/interceptor/trace/name/metadata 迁移路径。
 - [ ] 确认 `docs/operations/reliable-task-monitoring.md`、`docs/operations/reliable-task-runbook.md` 和 `docs/operations/prometheus-alerts-example.yml` 与当前真实指标和 Admin API 一致。
 - [ ] 确认生产接入 checklist 覆盖 Admin 内部网络隔离、认证授权、审计、payload 敏感信息、MySQL profile、告警阈值和恢复策略。
 - [ ] 确认监控告警示例不包含真实内网地址、凭据、Token、生产阈值承诺或未实现指标。
