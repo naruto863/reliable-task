@@ -63,6 +63,7 @@ reliable-task:
         queue-capacity: 200
   # Demo opts in to Admin APIs for local exploration.
   # Production defaults are admin.enabled=false, write-enabled=false, auth.enabled=true.
+  # v0.7 write guards still disable real mutations unless write, auth, audit and confirmation all pass.
   admin:
     enabled: true
     write-enabled: true
@@ -75,6 +76,10 @@ reliable-task:
       enabled: false
     batch:
       enabled: false
+    console:
+      payload-plaintext-enabled: false
+      payload-preview-length: 512
+      write-confirmation-required: true
 
 management:
   endpoint:

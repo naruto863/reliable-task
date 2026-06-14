@@ -6,6 +6,32 @@ This project follows Semantic Versioning.
 
 ## [Unreleased]
 
+No changes yet.
+
+## [0.7.0] - 2026-06-14
+
+### Added
+
+- Add the v0.7 Web console scope and acceptance baseline in `docs/review/RELIABLE_TASK_V07_SCOPE.md`.
+- Add console capabilities and console-safe task detail APIs for the v0.7 preview.
+- Add the standalone `reliable-task-console` Vue/Vite preview with dashboard, task list/detail, payload-safe detail panels, worker views, audit logs, read-only troubleshooting paths, guarded single-task writes, guarded batch preview/execute UI, and Playwright smoke coverage.
+- Add the v0.7 readiness report in `docs/review/RELIABLE_TASK_V07_READINESS_REPORT.md`.
+
+### Changed
+
+- Tighten Admin write APIs so enabled writes still require authorization, audit logging, and `X-Confirm-Operation: true` by default before mutating task state.
+- Document local demo + console startup, independent static deployment, Vite proxy settings, payload safety, and write-operation prerequisites.
+- Split CI into Maven, console typecheck/lint/unit/build, optional console smoke, and optional MySQL integration layers.
+- Change project release version to `0.7.0`.
+
+### Planned
+
+- Plan v0.7.x as an independent Web console preview with Vue 3, TypeScript, Vite, and Ant Design Vue.
+- Prioritize read-only troubleshooting before write operations: dashboard, task list, console-safe task detail, logs, timeline, Worker views, audit logs, failure aggregation, and common empty/error states.
+- Add backend console capabilities and payload-safe detail contracts before any UI can expose payload fields.
+- Require auth, audit, confirmation headers, operator identity, trace ids, and batch limits before console write operations become available.
+- Keep v1.0 API freeze, Maven Central release, complex multi-tenant platform, complex reporting, mobile-first redesign, and new storage/MQ/workflow backends out of v0.7 scope.
+
 ## [0.6.0] - 2026-06-13
 
 ### Added
@@ -107,7 +133,8 @@ This project follows Semantic Versioning.
 - Document that Admin APIs require authentication, authorization, audit logging, and network access controls before production use.
 - Keep real local configuration out of version control and use placeholder values in example configuration.
 
-[Unreleased]: https://github.com/naruto863/reliable-task/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/naruto863/reliable-task/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/naruto863/reliable-task/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/naruto863/reliable-task/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/naruto863/reliable-task/compare/v0.3.0...v0.5.0
 [0.3.0]: https://github.com/naruto863/reliable-task/compare/v0.1.0...v0.3.0

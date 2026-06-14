@@ -43,6 +43,7 @@ public class ReliableTaskAdminAutoConfiguration {
                                                    ObjectProvider<TaskAuthorizationProvider> authorizationProvider,
                                                    ObjectProvider<TaskEventPublisher> eventPublisher) {
         ReliableTaskProperties.Admin.Query query = properties.getAdmin().getQuery();
+        ReliableTaskProperties.Admin.Console console = properties.getAdmin().getConsole();
         return new TaskAdminController(taskQueryStore,
                 taskOperationsStore,
                 properties.getAdmin().getAuth().isEnabled(),
@@ -58,6 +59,9 @@ public class ReliableTaskAdminAutoConfiguration {
                         query.getMaxWindowDays(),
                         query.getDefaultLimit(),
                         query.getMaxLimit(),
-                        query.getSlowThresholdMs()));
+                        query.getSlowThresholdMs()),
+                console.isPayloadPlaintextEnabled(),
+                console.getPayloadPreviewLength(),
+                console.isWriteConfirmationRequired());
     }
 }

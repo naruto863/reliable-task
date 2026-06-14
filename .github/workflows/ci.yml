@@ -12,6 +12,11 @@ on:
         required: false
         type: boolean
         default: false
+      run-console-smoke:
+        description: "Run Playwright console smoke tests"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -53,3 +58,66 @@ jobs:
 
       - name: Run Testcontainers MySQL integration tests
         run: mvn -B -Pmysql-it -pl reliable-task-store,reliable-task-executor -am test
+
+  console-test:
+    name: Console Typecheck, Test, Build
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: reliable-task-console
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: reliable-task-console/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test -- --run
+
+      - name: Build
+        run: npm run build
+
+  console-smoke:
+    name: Console Playwright Smoke
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.run-console-smoke
+
+    defaults:
+      run:
+        working-directory: reliable-task-console
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: reliable-task-console/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install chromium --with-deps
+
+      - name: Smoke tests
+        run: npm run test:smoke

@@ -32,9 +32,11 @@
 - [ ] 更新或引用 `docs/review/RELIABLE_TASK_V03_V04_READINESS_REPORT.md`，确认 release notes 中的验证状态与 readiness 事实一致。
 - [ ] 对 v0.5.x 及后续生产运维版本，更新或引用 `docs/review/RELIABLE_TASK_V05_READINESS_REPORT.md`，确认 Admin 运维查询、dead letter SPI、监控 runbook 和 MySQL 验证状态与 release notes 一致。
 - [ ] 对 v0.6.x 及后续 SPI/模块边界版本，更新或引用 `docs/review/RELIABLE_TASK_V06_READINESS_REPORT.md`，确认 Store 窄接口、payload codec、interceptor chain、trace/name/metadata SPI、Worker/Admin starter 拆分、migration 脚本和验证状态与 release notes 一致。
+- [ ] 对 v0.7.x 及后续 Console preview 版本，更新或引用 `docs/review/RELIABLE_TASK_V07_READINESS_REPORT.md`，确认 Web 控制台、console-safe payload、写操作门禁、批量操作、demo/proxy 文档和 smoke 验证状态与 release notes 一致。
 - [ ] 确认 README 快速开始、Demo 文档和安全说明与当前版本一致。
 - [ ] 确认 README、中文 README 和 Demo 文档同步说明 v0.5 Admin 运维查询、dead letter SPI、生产默认值和本地 Demo opt-in 差异。
 - [ ] 确认 README、中文 README 和 Demo 文档同步说明 v0.6 Worker-only starter、Admin starter opt-in、schema.sql/Flyway/Liquibase 三选一初始化，以及 Store/payload/interceptor/trace/name/metadata 迁移路径。
+- [ ] 确认 README、中文 README、Demo 文档和 `reliable-task-console/README.md` 同步说明 v0.7 Console preview、独立静态部署、反向代理、payload 安全和写操作前置条件。
 - [ ] 确认 `docs/operations/reliable-task-monitoring.md`、`docs/operations/reliable-task-runbook.md` 和 `docs/operations/prometheus-alerts-example.yml` 与当前真实指标和 Admin API 一致。
 - [ ] 确认生产接入 checklist 覆盖 Admin 内部网络隔离、认证授权、审计、payload 敏感信息、MySQL profile、告警阈值和恢复策略。
 - [ ] 确认监控告警示例不包含真实内网地址、凭据、Token、生产阈值承诺或未实现指标。
@@ -45,10 +47,14 @@
 | 层级 | 命令 | 默认 CI | 说明 |
 | --- | --- | --- | --- |
 | 基础单元/自动配置/H2 schema | `mvn -B test` | 是，PR 和 push 自动执行 | 不依赖 Docker 或本地 MySQL，是最低合入门槛。 |
+| Console 类型检查/单测/构建 | `cd reliable-task-console && npm ci && npm run typecheck && npm run lint && npm run test -- --run && npm run build` | 是，v0.7 后应自动执行 | 独立前端工程，不进入 Maven reactor。 |
+| Console 只读 smoke | `cd reliable-task-console && npm run test:smoke` | 可选，建议手动或独立 job | 需要 Playwright browser；当前 smoke 使用 mock Admin API 覆盖 Dashboard、Tasks、Detail、Workers、Audit 只读路径。 |
 | Testcontainers MySQL 集成测试 | `mvn -B -Pmysql-it -pl reliable-task-store,reliable-task-executor -am test` | 否，可通过 GitHub Actions `workflow_dispatch` 手动开启 | 需要 Docker，用于验证真实 MySQL 唯一键、事务、并发 claim、租约 CAS 和恢复语义。 |
 | 本地 MySQL 集成测试 | `mvn -B -Pmysql-local-it -pl reliable-task-store,reliable-task-executor -am test` | 否，仅本地或专用环境 | 需要设置 `RELIABLE_TASK_IT_JDBC_URL`、`RELIABLE_TASK_IT_USERNAME`、`RELIABLE_TASK_IT_PASSWORD`，只允许连接可丢弃的集成测试库。 |
 
-基础 CI 必须保持轻量稳定，不应因为 Docker、Testcontainers 镜像拉取、本地 MySQL 或专用网络不可用而阻塞普通 PR。发布前验收需要补充至少一种真实 MySQL profile；若被环境阻塞，应按“已通过 / 未执行 / 阻塞原因 / 推荐恢复步骤”分层记录。
+基础 CI 必须保持轻量稳定，不应因为 Docker、Testcontainers 镜像拉取、本地 MySQL、Playwright browser 下载或专用网络不可用而阻塞普通 PR。发布前验收需要补充至少一种真实 MySQL profile；v0.7 Console 发布还应补充 console build 和 smoke。若被环境阻塞，应按“已通过 / 未执行 / 阻塞原因 / 推荐恢复步骤”分层记录。
+
+v0.7 Console preview 的发布准备以 `docs/review/RELIABLE_TASK_V07_READINESS_REPORT.md` 为事实来源。若创建 `v0.7.0` tag 或 GitHub Release，Release Notes 中的验证状态必须与该报告一致，并且不能把未执行的 MySQL/Testcontainers 集成测试写成通过。
 
 ## 发布命令
 

@@ -16,8 +16,11 @@ import com.reliabletask.core.model.TaskInstance;
 import com.reliabletask.core.model.WorkerHeartbeat;
 import com.reliabletask.core.spi.TaskAuthorizationProvider;
 import com.reliabletask.core.spi.TaskStore;
+import com.reliabletask.core.vo.ConsoleCapabilitiesVO;
+import com.reliabletask.core.vo.ConsoleTaskDetailVO;
 import com.reliabletask.core.vo.TaskDetailVO;
 import com.reliabletask.core.vo.FailureTopVO;
+import com.reliabletask.core.vo.PayloadViewVO;
 import com.reliabletask.core.vo.SlowTaskVO;
 import com.reliabletask.core.vo.TaskFailureVO;
 import com.reliabletask.core.vo.TaskTimelineItemVO;
@@ -57,6 +60,15 @@ class TaskAdminControllerTest {
     @BeforeEach
     void setUp() {
         controller = new TaskAdminController(taskStore);
+    }
+
+    private TaskAuthorizationProvider allowAllAuthorization() {
+        return (operator, action, taskId) -> true;
+    }
+
+    private TaskAdminController writeAllowedController() {
+        return new TaskAdminController(taskStore, true, allowAllAuthorization(), 60L,
+                true, true, 200, 1000, true);
     }
 
     @Test
@@ -280,6 +292,86 @@ class TaskAdminControllerTest {
     }
 
     @Test
+    @DisplayName("getConsoleCapabilities - 返回控制台安全默认能力")
+    void getConsoleCapabilities_returnsDefaultSafePayloadCapabilities() {
+        Result<ConsoleCapabilitiesVO> result = controller.getConsoleCapabilities("viewer");
+
+        assertEquals(200, result.getCode());
+        ConsoleCapabilitiesVO capabilities = result.getData();
+        assertTrue(capabilities.isAdminEnabled());
+        assertTrue(capabilities.isWriteEnabled());
+        assertFalse(capabilities.isAuthEnabled());
+        assertTrue(capabilities.isAuditEnabled());
+        assertTrue(capabilities.isBatchEnabled());
+        assertFalse(capabilities.isPayloadPlaintextEnabled());
+        assertFalse(capabilities.isPayloadRevealAllowed());
+        assertTrue(capabilities.isWriteConfirmationRequired());
+        assertEquals(200, capabilities.getMaxPageSize());
+        assertEquals(1000, capabilities.getMaxBatchLimit());
+        assertEquals(512, capabilities.getPayloadPreviewLength());
+    }
+
+    @Test
+    @DisplayName("getConsoleTaskDetail - 默认只返回 masked payload view")
+    void getConsoleTaskDetail_defaultMasksPayloadAndOmitsRawPayloadAccessor() throws Exception {
+        String rawPayload = "{\"secret\":\"token-123\",\"orderId\":\"ORD-1\"}";
+        TaskDetailVO detail = new TaskDetailVO();
+        detail.setId(1L);
+        detail.setTaskType("CREATE_SHIPMENT");
+        detail.setBizType("ORDER");
+        detail.setBizId("ORD-1");
+        detail.setStatusCode(TaskStatus.DEAD.getCode());
+        detail.setStatusDesc("DEAD");
+        detail.setPayload(rawPayload);
+        detail.setErrorMsg("TimeoutException: request timed out");
+        when(taskStore.getTaskDetail(1L)).thenReturn(detail);
+
+        Result<ConsoleTaskDetailVO> result = controller.getConsoleTaskDetail(1L, "viewer");
+
+        assertEquals(200, result.getCode());
+        ConsoleTaskDetailVO consoleDetail = result.getData();
+        assertEquals(1L, consoleDetail.getId());
+        assertEquals("CREATE_SHIPMENT", consoleDetail.getTaskType());
+        assertEquals("ORD-1", consoleDetail.getBizId());
+        assertEquals("TimeoutException: request timed out", consoleDetail.getErrorMsg());
+        assertThrows(NoSuchMethodException.class, () -> ConsoleTaskDetailVO.class.getMethod("getPayload"));
+
+        PayloadViewVO payloadView = consoleDetail.getPayloadView();
+        assertTrue(payloadView.isPayloadVisible());
+        assertTrue(payloadView.isPayloadMasked());
+        assertFalse(payloadView.isPayloadRevealAllowed());
+        assertEquals(rawPayload.length(), payloadView.getPayloadLength());
+        assertNull(payloadView.getPayloadPlaintext());
+        assertNotNull(payloadView.getPayloadPreview());
+        assertFalse(payloadView.getPayloadPreview().contains("secret"));
+        assertFalse(payloadView.getPayloadPreview().contains("token-123"));
+    }
+
+    @Test
+    @DisplayName("getConsoleTaskDetail - 显式启用明文时返回 payloadPlaintext")
+    void getConsoleTaskDetail_plaintextEnabledReturnsPayloadPlaintext() {
+        controller = new TaskAdminController(taskStore, false, null, 60L, true, true,
+                200, 1000, true, new TaskEventPublisher(), AdminQueryGuard.defaults(),
+                true, 16, false);
+        String rawPayload = "{\"secret\":\"token-123\",\"orderId\":\"ORD-1\"}";
+        TaskDetailVO detail = new TaskDetailVO();
+        detail.setId(1L);
+        detail.setTaskType("CREATE_SHIPMENT");
+        detail.setPayload(rawPayload);
+        when(taskStore.getTaskDetail(1L)).thenReturn(detail);
+
+        Result<ConsoleTaskDetailVO> result = controller.getConsoleTaskDetail(1L, "viewer");
+
+        assertEquals(200, result.getCode());
+        PayloadViewVO payloadView = result.getData().getPayloadView();
+        assertTrue(payloadView.isPayloadVisible());
+        assertFalse(payloadView.isPayloadMasked());
+        assertTrue(payloadView.isPayloadRevealAllowed());
+        assertEquals(rawPayload, payloadView.getPayloadPlaintext());
+        assertTrue(payloadView.getPayloadPreview().length() <= 16 + "...(truncated)".length());
+    }
+
+    @Test
     @DisplayName("getTaskTimeline - 存在任务返回生命周期")
     void getTaskTimeline_existingTask_returnsTimeline() {
         TaskDetailVO detail = new TaskDetailVO();
@@ -313,9 +405,10 @@ class TaskAdminControllerTest {
     @Test
     @DisplayName("retry - 不可重试任务返回 400")
     void retry_notAllowed_returns400() {
+        controller = writeAllowedController();
         when(taskStore.requeueTask(1L)).thenReturn(false);
 
-        Result<Boolean> result = controller.retry(1L, "admin", "trace-1");
+        Result<Boolean> result = controller.retry(1L, "admin", "trace-1", "true");
 
         assertEquals(400, result.getCode());
         assertFalse(Boolean.TRUE.equals(result.getData()));
@@ -325,9 +418,10 @@ class TaskAdminControllerTest {
     @Test
     @DisplayName("cancel - 可取消任务返回 success")
     void cancel_allowed_returnsSuccess() {
+        controller = writeAllowedController();
         when(taskStore.cancelTask(1L)).thenReturn(true);
 
-        Result<Boolean> result = controller.cancel(1L, "admin", "trace-1");
+        Result<Boolean> result = controller.cancel(1L, "admin", "trace-1", "true");
 
         assertEquals(200, result.getCode());
         assertEquals(Boolean.TRUE, result.getData());
@@ -342,7 +436,7 @@ class TaskAdminControllerTest {
     @DisplayName("cancel - 成功后发布 CANCELLED 事件")
     void cancel_allowed_publishesCancelledEvent() {
         List<TaskEvent> events = new ArrayList<>();
-        controller = new TaskAdminController(taskStore, false, null, 60L, true, true,
+        controller = new TaskAdminController(taskStore, true, allowAllAuthorization(), 60L, true, true,
                 200, 1000, true, new TaskEventPublisher(List.of(events::add)));
         TaskDetailVO before = new TaskDetailVO();
         before.setId(1L);
@@ -353,7 +447,7 @@ class TaskAdminControllerTest {
         when(taskStore.getTaskDetail(1L)).thenReturn(before);
         when(taskStore.cancelTask(1L)).thenReturn(true);
 
-        Result<Boolean> result = controller.cancel(1L, "admin", "trace-1");
+        Result<Boolean> result = controller.cancel(1L, "admin", "trace-1", "true");
 
         assertEquals(200, result.getCode());
         assertEquals(1, events.size());
@@ -368,7 +462,9 @@ class TaskAdminControllerTest {
     @Test
     @DisplayName("updatePayload - 缺失 payload 返回 400")
     void updatePayload_missingPayload_returns400() {
-        Result<Boolean> result = controller.updatePayload(1L, Map.of("k", "v"), "admin", "trace-1");
+        controller = writeAllowedController();
+
+        Result<Boolean> result = controller.updatePayload(1L, Map.of("k", "v"), "admin", "trace-1", "true");
 
         assertEquals(400, result.getCode());
         assertEquals("payload is required", result.getMessage());
@@ -379,9 +475,11 @@ class TaskAdminControllerTest {
     @Test
     @DisplayName("updatePayload - store 返回 false 时返回 400")
     void updatePayload_storeRejects_returns400() {
+        controller = writeAllowedController();
         when(taskStore.updatePayload(2L, "{\"a\":1}")).thenReturn(false);
 
-        Result<Boolean> result = controller.updatePayload(2L, Map.of("payload", "{\"a\":1}"), "admin", "trace-1");
+        Result<Boolean> result = controller.updatePayload(2L, Map.of("payload", "{\"a\":1}"),
+                "admin", "trace-1", "true");
 
         assertEquals(400, result.getCode());
         assertTrue(result.getMessage().contains("only be updated"));
@@ -390,9 +488,10 @@ class TaskAdminControllerTest {
     @Test
     @DisplayName("requeue - 成功时写入审计")
     void requeue_allowed_recordsAudit() {
+        controller = writeAllowedController();
         when(taskStore.requeueTask(3L)).thenReturn(true);
 
-        Result<Boolean> result = controller.requeue(3L, "ops", "trace-3");
+        Result<Boolean> result = controller.requeue(3L, "ops", "trace-3", "true");
 
         assertEquals(200, result.getCode());
         ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
@@ -404,25 +503,60 @@ class TaskAdminControllerTest {
     }
 
     @Test
-    @DisplayName("audit disabled - 写操作成功时不写入审计")
-    void auditDisabled_writeOperationSkipsAudit() {
-        controller = new TaskAdminController(taskStore, false, null, 60L, false, true);
-        when(taskStore.cancelTask(1L)).thenReturn(true);
+    @DisplayName("confirmation required - 缺少确认 header 时拒绝写操作并写审计")
+    void confirmationRequired_missingHeaderRejectsBeforeStoreAndAudits() {
+        controller = writeAllowedController();
 
-        Result<Boolean> result = controller.cancel(1L, "admin", "trace-1");
+        Result<Boolean> result = controller.cancel(1L, "admin", "trace-1", null);
 
-        assertEquals(200, result.getCode());
-        verify(taskStore).cancelTask(1L);
+        assertEquals(400, result.getCode());
+        assertTrue(result.getMessage().contains("X-Confirm-Operation"));
+        verify(taskStore, never()).cancelTask(1L);
+        ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
+        verify(taskStore).saveAuditLog(captor.capture());
+        assertEquals("TASK_CANCEL", captor.getValue().getOperationType());
+        assertEquals("FAILED", captor.getValue().getResult());
+        assertTrue(captor.getValue().getErrorMsg().contains("X-Confirm-Operation"));
+    }
+
+    @Test
+    @DisplayName("auth disabled - 写操作开启时仍拒绝并写审计")
+    void authDisabled_writeEnabledRejectsBeforeStoreAndAudits() {
+        controller = new TaskAdminController(taskStore, false, null, 60L, true, true,
+                200, 1000, true);
+
+        Result<Boolean> result = controller.cancel(1L, "admin", "trace-1", "true");
+
+        assertEquals(403, result.getCode());
+        assertTrue(result.getMessage().contains("auth.enabled=true"));
+        verify(taskStore, never()).cancelTask(1L);
+        ArgumentCaptor<AuditLog> captor = ArgumentCaptor.forClass(AuditLog.class);
+        verify(taskStore).saveAuditLog(captor.capture());
+        assertEquals("TASK_CANCEL", captor.getValue().getOperationType());
+        assertEquals("FAILED", captor.getValue().getResult());
+    }
+
+    @Test
+    @DisplayName("audit disabled - 写操作开启时拒绝且不调用 store")
+    void auditDisabled_writeEnabledRejectsBeforeStore() {
+        controller = new TaskAdminController(taskStore, true, allowAllAuthorization(), 60L, false, true,
+                200, 1000, true);
+
+        Result<Boolean> result = controller.cancel(1L, "admin", "trace-1", "true");
+
+        assertEquals(403, result.getCode());
+        assertTrue(result.getMessage().contains("audit.enabled=true"));
+        verify(taskStore, never()).cancelTask(1L);
         verify(taskStore, never()).saveAuditLog(any(AuditLog.class));
     }
 
     @Test
     @DisplayName("write disabled - 写操作返回 404 且不调用 store")
     void writeDisabled_rejectsWriteOperation() {
-        controller = new TaskAdminController(taskStore, false, null, 60L, true, true,
+        controller = new TaskAdminController(taskStore, true, allowAllAuthorization(), 60L, true, true,
                 200, 1000, false);
 
-        Result<Boolean> result = controller.cancel(1L, "admin", "trace-1");
+        Result<Boolean> result = controller.cancel(1L, "admin", "trace-1", "true");
 
         assertEquals(404, result.getCode());
         assertTrue(result.getMessage().contains("write operation is disabled"));
@@ -517,7 +651,7 @@ class TaskAdminControllerTest {
     void authEnabledWithoutProvider_rejectsWriteOperation() {
         controller = new TaskAdminController(taskStore, true, null);
 
-        Result<Boolean> result = controller.cancel(1L, "admin", "trace-auth");
+        Result<Boolean> result = controller.cancel(1L, "admin", "trace-auth", "true");
 
         assertEquals(403, result.getCode());
         assertTrue(result.getMessage().contains("Forbidden"));
@@ -544,11 +678,10 @@ class TaskAdminControllerTest {
     @Test
     @DisplayName("auth - provider 允许时执行写操作")
     void authProviderAllows_executesWriteOperation() {
-        TaskAuthorizationProvider provider = (operator, action, taskId) -> true;
-        controller = new TaskAdminController(taskStore, true, provider);
+        controller = writeAllowedController();
         when(taskStore.cancelTask(1L)).thenReturn(true);
 
-        Result<Boolean> result = controller.cancel(1L, "admin", "trace-auth");
+        Result<Boolean> result = controller.cancel(1L, "admin", "trace-auth", "true");
 
         assertEquals(200, result.getCode());
         verify(taskStore).cancelTask(1L);
@@ -569,6 +702,7 @@ class TaskAdminControllerTest {
     @Test
     @DisplayName("batchRequeue - 批量重新入队 DEAD 任务并记录结果")
     void batchRequeue_requeuesDeadTasksAndRecordsResult() {
+        controller = writeAllowedController();
         when(taskStore.findOperableTaskIds("TYPE_A", TaskStatus.DEAD, null, null, 10))
                 .thenReturn(List.of(1L, 2L));
         when(taskStore.createBatchOperation(any(), any(), any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any()))
@@ -578,7 +712,7 @@ class TaskAdminControllerTest {
 
         Result<BatchOperationResult> result = controller.batchRequeue(
                 new TaskAdminController.BatchOperationRequest("TYPE_A", null, null, null, 10, false),
-                "ops", "trace-batch");
+                "ops", "trace-batch", "true");
 
         assertEquals(200, result.getCode());
         assertEquals(2, result.getData().getTotalCount());
@@ -589,8 +723,26 @@ class TaskAdminControllerTest {
     }
 
     @Test
+    @DisplayName("previewBatch - 缺少确认 header 时拒绝且不创建批量记录")
+    void previewBatch_missingConfirmationRejectsBeforeBatchRecordAndAudits() {
+        controller = writeAllowedController();
+
+        Result<BatchOperationResult> result = controller.previewBatch(
+                new TaskAdminController.BatchOperationRequest("TYPE_A", TaskStatus.DEAD.getCode(), null, null, 5, true),
+                "ops", "trace-batch", null);
+
+        assertEquals(400, result.getCode());
+        assertTrue(result.getMessage().contains("X-Confirm-Operation"));
+        verify(taskStore, never()).findOperableTaskIds(any(), any(), any(), any(), anyInt());
+        verify(taskStore, never()).createBatchOperation(any(), any(), any(), any(), any(), any(),
+                anyInt(), anyBoolean(), any(), any());
+        verify(taskStore).saveAuditLog(any(AuditLog.class));
+    }
+
+    @Test
     @DisplayName("batchRequeue - limit 超限时裁剪到 Admin 批量上限")
     void batchRequeue_clampsLimit() {
+        controller = writeAllowedController();
         when(taskStore.findOperableTaskIds("TYPE_A", TaskStatus.DEAD, null, null, 1000))
                 .thenReturn(List.of());
         when(taskStore.createBatchOperation(any(), any(), any(), any(), any(), any(),
@@ -599,7 +751,7 @@ class TaskAdminControllerTest {
 
         Result<BatchOperationResult> result = controller.batchRequeue(
                 new TaskAdminController.BatchOperationRequest("TYPE_A", null, null, null, 5000, false),
-                "ops", "trace-batch");
+                "ops", "trace-batch", "true");
 
         assertEquals(200, result.getCode());
         verify(taskStore).findOperableTaskIds("TYPE_A", TaskStatus.DEAD, null, null, 1000);
@@ -610,11 +762,11 @@ class TaskAdminControllerTest {
     @Test
     @DisplayName("batch disabled - 批量操作接口返回 404")
     void batchDisabled_returnsNotFound() {
-        controller = new TaskAdminController(taskStore, false, null, 60L, true, false);
+        controller = new TaskAdminController(taskStore, true, allowAllAuthorization(), 60L, true, false);
 
         Result<BatchOperationResult> result = controller.batchRequeue(
                 new TaskAdminController.BatchOperationRequest("TYPE_A", null, null, null, 10, false),
-                "ops", "trace-batch");
+                "ops", "trace-batch", "true");
 
         assertEquals(404, result.getCode());
         verify(taskStore, never()).findOperableTaskIds(any(), any(), any(), any(), anyInt());
@@ -623,6 +775,7 @@ class TaskAdminControllerTest {
     @Test
     @DisplayName("batchCancel - 默认取消 PENDING 和 RETRYING 任务")
     void batchCancel_withoutStatus_cancelsPendingAndRetryingTasks() {
+        controller = writeAllowedController();
         when(taskStore.findOperableTaskIds("TYPE_A", TaskStatus.PENDING, null, null, 10))
                 .thenReturn(List.of(1L));
         when(taskStore.findOperableTaskIds("TYPE_A", TaskStatus.RETRYING, null, null, 9))
@@ -634,7 +787,7 @@ class TaskAdminControllerTest {
 
         Result<BatchOperationResult> result = controller.batchCancel(
                 new TaskAdminController.BatchOperationRequest("TYPE_A", null, null, null, 10, false),
-                "ops", "trace-batch");
+                "ops", "trace-batch", "true");
 
         assertEquals(200, result.getCode());
         assertEquals(2, result.getData().getSuccessCount());
@@ -644,6 +797,7 @@ class TaskAdminControllerTest {
     @Test
     @DisplayName("previewBatch - 只预览不执行任务操作")
     void previewBatch_returnsDryRunResult() {
+        controller = writeAllowedController();
         when(taskStore.findOperableTaskIds("TYPE_A", TaskStatus.DEAD, null, null, 5))
                 .thenReturn(List.of(1L, 2L, 3L));
         when(taskStore.createBatchOperation(any(), any(), any(), any(), any(), any(), anyInt(), eq(true), any(), any()))
@@ -651,7 +805,7 @@ class TaskAdminControllerTest {
 
         Result<BatchOperationResult> result = controller.previewBatch(
                 new TaskAdminController.BatchOperationRequest("TYPE_A", TaskStatus.DEAD.getCode(), null, null, 5, true),
-                "ops", "trace-batch");
+                "ops", "trace-batch", "true");
 
         assertEquals(200, result.getCode());
         assertTrue(result.getData().isDryRun());

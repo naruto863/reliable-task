@@ -73,8 +73,12 @@ import java.util.Map;
  *       enabled: false
  *     auth:
  *       enabled: true
- *     batch:
- *       enabled: false
+     *     batch:
+     *       enabled: false
+     *     console:
+     *       payload-plaintext-enabled: false
+     *       payload-preview-length: 512
+     *       write-confirmation-required: true
  * </pre>
  */
 @Data
@@ -452,6 +456,11 @@ public class ReliableTaskProperties {
          */
         private Batch batch = new Batch();
 
+        /**
+         * 控制台配置
+         */
+        private Console console = new Console();
+
         @Data
         public static class Query {
             /**
@@ -502,6 +511,24 @@ public class ReliableTaskProperties {
              * 是否启用 Admin 批量运维，默认 false
              */
             private boolean enabled = false;
+        }
+
+        @Data
+        public static class Console {
+            /**
+             * 是否允许控制台返回 payload 明文，默认 false。
+             */
+            private boolean payloadPlaintextEnabled = false;
+
+            /**
+             * payload preview 最大长度，默认 512。
+             */
+            private int payloadPreviewLength = 512;
+
+            /**
+             * 控制台写操作是否要求确认 header，默认 true。
+             */
+            private boolean writeConfirmationRequired = true;
         }
     }
 }

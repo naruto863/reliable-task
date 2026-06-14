@@ -127,7 +127,7 @@ class ReliableTaskV2EndToEndTest {
                 .bizId("ORD-V2-CANCEL")
                 .payload("{}")
                 .build()).getTaskId();
-        Result<Boolean> cancelResult = harness.adminController.cancel(cancelTaskId, "ops-user", "trace-cancel");
+        Result<Boolean> cancelResult = harness.adminController.cancel(cancelTaskId, "ops-user", "trace-cancel", "true");
 
         assertThat(cancelResult.getCode()).isEqualTo(200);
         assertThat(harness.taskStore.getById(cancelTaskId).getStatus()).isEqualTo(TaskStatus.CANCELLED);
@@ -142,7 +142,7 @@ class ReliableTaskV2EndToEndTest {
         TaskInstance deadB = harness.taskStore.save(deadTask("DEAD-B"));
         Result<BatchOperationResult> batchResult = harness.adminController.batchRequeue(
                 new TaskAdminController.BatchOperationRequest(null, null, null, null, 10, false),
-                "ops-user", "trace-batch");
+                "ops-user", "trace-batch", "true");
 
         assertThat(batchResult.getCode()).isEqualTo(200);
         assertThat(batchResult.getData().getTotalCount()).isEqualTo(2);

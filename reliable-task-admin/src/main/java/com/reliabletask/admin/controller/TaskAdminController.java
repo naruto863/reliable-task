@@ -20,6 +20,9 @@ import com.reliabletask.core.spi.TaskOperationsStore;
 import com.reliabletask.core.spi.TaskQueryStore;
 import com.reliabletask.core.spi.TaskStore;
 import com.reliabletask.core.spi.noop.NoopTaskAuthorizationProvider;
+import com.reliabletask.core.vo.ConsoleCapabilitiesVO;
+import com.reliabletask.core.vo.ConsoleTaskDetailVO;
+import com.reliabletask.core.vo.PayloadViewVO;
 import com.reliabletask.core.vo.TaskDetailVO;
 import com.reliabletask.core.vo.FailureTopVO;
 import com.reliabletask.core.vo.SlowTaskVO;
@@ -54,6 +57,7 @@ public class TaskAdminController {
     private static final int DEFAULT_MAX_BATCH_LIMIT = 1000;
     private static final int DEFAULT_FAILURE_TOP_LIMIT = 20;
     private static final int HARD_MAX_FAILURE_TOP_LIMIT = 100;
+    private static final int DEFAULT_PAYLOAD_PREVIEW_LENGTH = 512;
 
     private final TaskQueryStore taskQueryStore;
     private final TaskOperationsStore taskOperationsStore;
@@ -67,6 +71,9 @@ public class TaskAdminController {
     private final boolean writeEnabled;
     private final TaskEventPublisher eventPublisher;
     private final AdminQueryGuard adminQueryGuard;
+    private final boolean payloadPlaintextEnabled;
+    private final int payloadPreviewLength;
+    private final boolean writeConfirmationRequired;
 
     public TaskAdminController(TaskStore taskStore) {
         this(taskStore, false, new NoopTaskAuthorizationProvider(), 60L, true, true,
@@ -137,6 +144,25 @@ public class TaskAdminController {
                 maxPageSize, maxBatchLimit, writeEnabled, eventPublisher, AdminQueryGuard.defaults());
     }
 
+    public TaskAdminController(TaskStore taskStore,
+                               boolean authEnabled,
+                               TaskAuthorizationProvider authorizationProvider,
+                               long staleWorkerThresholdSeconds,
+                               boolean auditEnabled,
+                               boolean batchEnabled,
+                               int maxPageSize,
+                               int maxBatchLimit,
+                               boolean writeEnabled,
+                               TaskEventPublisher eventPublisher,
+                               AdminQueryGuard adminQueryGuard,
+                               boolean payloadPlaintextEnabled,
+                               int payloadPreviewLength,
+                               boolean writeConfirmationRequired) {
+        this(taskStore, taskStore, authEnabled, authorizationProvider, staleWorkerThresholdSeconds, auditEnabled, batchEnabled,
+                maxPageSize, maxBatchLimit, writeEnabled, eventPublisher, adminQueryGuard,
+                payloadPlaintextEnabled, payloadPreviewLength, writeConfirmationRequired);
+    }
+
     public TaskAdminController(TaskQueryStore taskQueryStore,
                                TaskOperationsStore taskOperationsStore,
                                boolean authEnabled,
@@ -149,6 +175,26 @@ public class TaskAdminController {
                                boolean writeEnabled,
                                TaskEventPublisher eventPublisher,
                                AdminQueryGuard adminQueryGuard) {
+        this(taskQueryStore, taskOperationsStore, authEnabled, authorizationProvider, staleWorkerThresholdSeconds,
+                auditEnabled, batchEnabled, maxPageSize, maxBatchLimit, writeEnabled, eventPublisher, adminQueryGuard,
+                false, DEFAULT_PAYLOAD_PREVIEW_LENGTH, true);
+    }
+
+    public TaskAdminController(TaskQueryStore taskQueryStore,
+                               TaskOperationsStore taskOperationsStore,
+                               boolean authEnabled,
+                               TaskAuthorizationProvider authorizationProvider,
+                               long staleWorkerThresholdSeconds,
+                               boolean auditEnabled,
+                               boolean batchEnabled,
+                               int maxPageSize,
+                               int maxBatchLimit,
+                               boolean writeEnabled,
+                               TaskEventPublisher eventPublisher,
+                               AdminQueryGuard adminQueryGuard,
+                               boolean payloadPlaintextEnabled,
+                               int payloadPreviewLength,
+                               boolean writeConfirmationRequired) {
         this.taskQueryStore = taskQueryStore;
         this.taskOperationsStore = taskOperationsStore;
         this.authEnabled = authEnabled;
@@ -161,6 +207,9 @@ public class TaskAdminController {
         this.writeEnabled = writeEnabled;
         this.eventPublisher = eventPublisher != null ? eventPublisher : new TaskEventPublisher();
         this.adminQueryGuard = adminQueryGuard != null ? adminQueryGuard : AdminQueryGuard.defaults();
+        this.payloadPlaintextEnabled = payloadPlaintextEnabled;
+        this.payloadPreviewLength = normalizePayloadPreviewLength(payloadPreviewLength);
+        this.writeConfirmationRequired = writeConfirmationRequired;
     }
 
     /**
@@ -308,6 +357,37 @@ public class TaskAdminController {
     }
 
     /**
+     * 查询控制台能力开关。
+     */
+    @GetMapping("/console/capabilities")
+    public Result<ConsoleCapabilitiesVO> getConsoleCapabilities(
+            @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator) {
+        Result<ConsoleCapabilitiesVO> forbidden = forbidIfNeeded(TASK_VIEW, operator, null, false, null);
+        if (forbidden != null) {
+            return forbidden;
+        }
+        return Result.success(buildConsoleCapabilities());
+    }
+
+    /**
+     * 查询控制台安全任务详情。
+     */
+    @GetMapping("/console/tasks/{id}")
+    public Result<ConsoleTaskDetailVO> getConsoleTaskDetail(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator) {
+        Result<ConsoleTaskDetailVO> forbidden = forbidIfNeeded(TASK_VIEW, operator, id, false, null);
+        if (forbidden != null) {
+            return forbidden;
+        }
+        TaskDetailVO detail = taskQueryStore.getTaskDetail(id);
+        if (detail == null) {
+            return Result.error(404, "Task not found: " + id);
+        }
+        return Result.success(toConsoleTaskDetail(detail));
+    }
+
+    /**
      * 查询任务详情
      */
     @GetMapping("/tasks/{id}")
@@ -407,14 +487,13 @@ public class TaskAdminController {
     @PostMapping("/tasks/{id}/retry")
     public Result<Boolean> retry(@PathVariable Long id,
                                  @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator,
-                                 @RequestHeader(value = "X-Trace-Id", required = false) String traceId) {
-        Result<Boolean> disabled = rejectWriteIfDisabled();
-        if (disabled != null) {
-            return disabled;
-        }
-        Result<Boolean> forbidden = forbidIfNeeded(TASK_RETRY, operator, id, true, traceId);
-        if (forbidden != null) {
-            return forbidden;
+                                 @RequestHeader(value = "X-Trace-Id", required = false) String traceId,
+                                 @RequestHeader(value = "X-Confirm-Operation", required = false)
+                                 String confirmOperation) {
+        Result<Boolean> rejected =
+                rejectTaskWriteIfNotAllowed("TASK_RETRY", TASK_RETRY, operator, id, traceId, confirmOperation);
+        if (rejected != null) {
+            return rejected;
         }
         TaskInstance before = loadTaskForEvent(id);
         boolean success = taskOperationsStore.requeueTask(id);
@@ -438,14 +517,13 @@ public class TaskAdminController {
     @PostMapping("/tasks/{id}/cancel")
     public Result<Boolean> cancel(@PathVariable Long id,
                                   @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator,
-                                  @RequestHeader(value = "X-Trace-Id", required = false) String traceId) {
-        Result<Boolean> disabled = rejectWriteIfDisabled();
-        if (disabled != null) {
-            return disabled;
-        }
-        Result<Boolean> forbidden = forbidIfNeeded(TASK_CANCEL, operator, id, true, traceId);
-        if (forbidden != null) {
-            return forbidden;
+                                  @RequestHeader(value = "X-Trace-Id", required = false) String traceId,
+                                  @RequestHeader(value = "X-Confirm-Operation", required = false)
+                                  String confirmOperation) {
+        Result<Boolean> rejected =
+                rejectTaskWriteIfNotAllowed("TASK_CANCEL", TASK_CANCEL, operator, id, traceId, confirmOperation);
+        if (rejected != null) {
+            return rejected;
         }
         TaskInstance before = loadTaskForEvent(id);
         boolean success = taskOperationsStore.cancelTask(id);
@@ -470,14 +548,13 @@ public class TaskAdminController {
     @PostMapping("/tasks/{id}/requeue")
     public Result<Boolean> requeue(@PathVariable Long id,
                                    @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator,
-                                   @RequestHeader(value = "X-Trace-Id", required = false) String traceId) {
-        Result<Boolean> disabled = rejectWriteIfDisabled();
-        if (disabled != null) {
-            return disabled;
-        }
-        Result<Boolean> forbidden = forbidIfNeeded(TASK_RETRY, operator, id, true, traceId);
-        if (forbidden != null) {
-            return forbidden;
+                                   @RequestHeader(value = "X-Trace-Id", required = false) String traceId,
+                                   @RequestHeader(value = "X-Confirm-Operation", required = false)
+                                   String confirmOperation) {
+        Result<Boolean> rejected =
+                rejectTaskWriteIfNotAllowed("TASK_REQUEUE", TASK_RETRY, operator, id, traceId, confirmOperation);
+        if (rejected != null) {
+            return rejected;
         }
         TaskInstance before = loadTaskForEvent(id);
         boolean success = taskOperationsStore.requeueTask(id);
@@ -502,14 +579,13 @@ public class TaskAdminController {
     public Result<Boolean> updatePayload(@PathVariable Long id,
                                          @RequestBody Map<String, String> body,
                                          @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator,
-                                         @RequestHeader(value = "X-Trace-Id", required = false) String traceId) {
-        Result<Boolean> disabled = rejectWriteIfDisabled();
-        if (disabled != null) {
-            return disabled;
-        }
-        Result<Boolean> forbidden = forbidIfNeeded(TASK_UPDATE_PAYLOAD, operator, id, true, traceId);
-        if (forbidden != null) {
-            return forbidden;
+                                         @RequestHeader(value = "X-Trace-Id", required = false) String traceId,
+                                         @RequestHeader(value = "X-Confirm-Operation", required = false)
+                                         String confirmOperation) {
+        Result<Boolean> rejected = rejectTaskWriteIfNotAllowed(
+                "TASK_UPDATE_PAYLOAD", TASK_UPDATE_PAYLOAD, operator, id, traceId, confirmOperation);
+        if (rejected != null) {
+            return rejected;
         }
         String payload = body.get("payload");
         if (payload == null) {
@@ -574,18 +650,16 @@ public class TaskAdminController {
     @PostMapping("/tasks/batch/preview")
     public Result<BatchOperationResult> previewBatch(@RequestBody BatchOperationRequest request,
                                                      @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator,
-                                                     @RequestHeader(value = "X-Trace-Id", required = false) String traceId) {
-        Result<BatchOperationResult> disabled = rejectWriteIfDisabled();
-        if (disabled != null) {
-            return disabled;
+                                                     @RequestHeader(value = "X-Trace-Id", required = false) String traceId,
+                                                     @RequestHeader(value = "X-Confirm-Operation", required = false)
+                                                     String confirmOperation) {
+        Result<BatchOperationResult> rejected = rejectBatchWriteIfNotAllowed(
+                "BATCH_PREVIEW", operator, traceId, confirmOperation);
+        if (rejected != null) {
+            return rejected;
         }
         if (!batchEnabled) {
             return Result.error(404, "Batch operation is disabled");
-        }
-        Result<BatchOperationResult> forbidden =
-                forbidIfNeeded(TASK_BATCH_OPERATION, operator, null, true, traceId);
-        if (forbidden != null) {
-            return forbidden;
         }
 
         List<Long> taskIds = findBatchTaskIds(request, normalizeLimit(request.limit()));
@@ -611,18 +685,16 @@ public class TaskAdminController {
     @PostMapping("/tasks/batch/requeue")
     public Result<BatchOperationResult> batchRequeue(@RequestBody BatchOperationRequest request,
                                                      @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator,
-                                                     @RequestHeader(value = "X-Trace-Id", required = false) String traceId) {
-        Result<BatchOperationResult> disabled = rejectWriteIfDisabled();
-        if (disabled != null) {
-            return disabled;
+                                                     @RequestHeader(value = "X-Trace-Id", required = false) String traceId,
+                                                     @RequestHeader(value = "X-Confirm-Operation", required = false)
+                                                     String confirmOperation) {
+        Result<BatchOperationResult> rejected = rejectBatchWriteIfNotAllowed(
+                "BATCH_REQUEUE_DEAD", operator, traceId, confirmOperation);
+        if (rejected != null) {
+            return rejected;
         }
         if (!batchEnabled) {
             return Result.error(404, "Batch operation is disabled");
-        }
-        Result<BatchOperationResult> forbidden =
-                forbidIfNeeded(TASK_BATCH_OPERATION, operator, null, true, traceId);
-        if (forbidden != null) {
-            return forbidden;
         }
         BatchOperationRequest effective = request.withStatus(TaskStatus.DEAD.getCode());
         List<Long> taskIds = findBatchTaskIds(effective, normalizeLimit(effective.limit()));
@@ -642,18 +714,16 @@ public class TaskAdminController {
     @PostMapping("/tasks/batch/cancel")
     public Result<BatchOperationResult> batchCancel(@RequestBody BatchOperationRequest request,
                                                     @RequestHeader(value = "X-Operator", defaultValue = "anonymous") String operator,
-                                                    @RequestHeader(value = "X-Trace-Id", required = false) String traceId) {
-        Result<BatchOperationResult> disabled = rejectWriteIfDisabled();
-        if (disabled != null) {
-            return disabled;
+                                                    @RequestHeader(value = "X-Trace-Id", required = false) String traceId,
+                                                    @RequestHeader(value = "X-Confirm-Operation", required = false)
+                                                    String confirmOperation) {
+        Result<BatchOperationResult> rejected = rejectBatchWriteIfNotAllowed(
+                "BATCH_CANCEL", operator, traceId, confirmOperation);
+        if (rejected != null) {
+            return rejected;
         }
         if (!batchEnabled) {
             return Result.error(404, "Batch operation is disabled");
-        }
-        Result<BatchOperationResult> forbidden =
-                forbidIfNeeded(TASK_BATCH_OPERATION, operator, null, true, traceId);
-        if (forbidden != null) {
-            return forbidden;
         }
         int limit = normalizeLimit(request.limit());
         List<Long> taskIds = findCancelableTaskIds(request, limit);
@@ -666,6 +736,173 @@ public class TaskAdminController {
                 request.status() == null ? null : TaskStatus.fromCode(request.status()),
                 TaskStatus.CANCELLED, "batch cancel by " + operator, traceId);
         return Result.success(result);
+    }
+
+    private ConsoleCapabilitiesVO buildConsoleCapabilities() {
+        ConsoleCapabilitiesVO capabilities = new ConsoleCapabilitiesVO();
+        capabilities.setAdminEnabled(true);
+        capabilities.setWriteEnabled(writeEnabled);
+        capabilities.setAuthEnabled(authEnabled);
+        capabilities.setAuditEnabled(auditEnabled);
+        capabilities.setBatchEnabled(batchEnabled);
+        capabilities.setMaxPageSize(maxPageSize);
+        capabilities.setMaxBatchLimit(maxBatchLimit);
+        capabilities.setPayloadPlaintextEnabled(payloadPlaintextEnabled);
+        capabilities.setPayloadRevealAllowed(payloadPlaintextEnabled);
+        capabilities.setPayloadPreviewLength(payloadPreviewLength);
+        capabilities.setWriteConfirmationRequired(writeConfirmationRequired);
+        return capabilities;
+    }
+
+    private ConsoleTaskDetailVO toConsoleTaskDetail(TaskDetailVO detail) {
+        ConsoleTaskDetailVO consoleDetail = new ConsoleTaskDetailVO();
+        consoleDetail.setId(detail.getId());
+        consoleDetail.setTaskType(detail.getTaskType());
+        consoleDetail.setBizType(detail.getBizType());
+        consoleDetail.setBizId(detail.getBizId());
+        consoleDetail.setBizUniqueKey(detail.getBizUniqueKey());
+        consoleDetail.setStatusCode(detail.getStatusCode());
+        consoleDetail.setStatusDesc(detail.getStatusDesc());
+        consoleDetail.setPriority(detail.getPriority());
+        consoleDetail.setPayloadView(buildPayloadView(detail.getPayload()));
+        consoleDetail.setExecuteCount(detail.getExecuteCount());
+        consoleDetail.setMaxRetryCount(detail.getMaxRetryCount());
+        consoleDetail.setRetryStrategy(detail.getRetryStrategy());
+        consoleDetail.setRetryIntervalMs(detail.getRetryIntervalMs());
+        consoleDetail.setNextExecuteTime(detail.getNextExecuteTime());
+        consoleDetail.setShardKey(detail.getShardKey());
+        consoleDetail.setTenantId(detail.getTenantId());
+        consoleDetail.setWorkerId(detail.getWorkerId());
+        consoleDetail.setErrorMsg(detail.getErrorMsg());
+        consoleDetail.setTraceId(detail.getTraceId());
+        consoleDetail.setCreateTime(detail.getCreateTime());
+        consoleDetail.setUpdateTime(detail.getUpdateTime());
+        consoleDetail.setFinishTime(detail.getFinishTime());
+        return consoleDetail;
+    }
+
+    private PayloadViewVO buildPayloadView(String payload) {
+        PayloadViewVO view = new PayloadViewVO();
+        boolean hasPayload = payload != null;
+        view.setPayloadVisible(hasPayload);
+        view.setPayloadLength(hasPayload ? payload.length() : 0);
+        view.setPayloadRevealAllowed(hasPayload && payloadPlaintextEnabled);
+        if (!hasPayload) {
+            return view;
+        }
+
+        view.setPayloadMasked(!payloadPlaintextEnabled);
+        view.setPayloadPreview(payloadPlaintextEnabled
+                ? truncatePayloadPreview(payload)
+                : maskPayloadPreview(payload));
+        if (payloadPlaintextEnabled) {
+            view.setPayloadPlaintext(payload);
+        }
+        return view;
+    }
+
+    private String maskPayloadPreview(String payload) {
+        int previewLength = Math.min(payload.length(), payloadPreviewLength);
+        String preview = "*".repeat(previewLength);
+        if (payload.length() > previewLength) {
+            return preview + "...(truncated)";
+        }
+        return preview;
+    }
+
+    private String truncatePayloadPreview(String payload) {
+        if (payload.length() <= payloadPreviewLength) {
+            return payload;
+        }
+        return payload.substring(0, payloadPreviewLength) + "...(truncated)";
+    }
+
+    private <T> Result<T> rejectTaskWriteIfNotAllowed(String operationType, String action, String operator,
+                                                       Long taskId, String traceId, String confirmOperation) {
+        Result<T> disabled = rejectWriteIfDisabled();
+        if (disabled != null) {
+            return disabled;
+        }
+        Result<T> unsafe = rejectUnsafeTaskWriteConfig(operationType, operator, taskId, traceId);
+        if (unsafe != null) {
+            return unsafe;
+        }
+        Result<T> unconfirmed =
+                rejectTaskWriteIfConfirmationMissing(operationType, operator, taskId, traceId, confirmOperation);
+        if (unconfirmed != null) {
+            return unconfirmed;
+        }
+        return forbidIfNeeded(action, operator, taskId, true, traceId);
+    }
+
+    private <T> Result<T> rejectBatchWriteIfNotAllowed(String operationType, String operator,
+                                                       String traceId, String confirmOperation) {
+        Result<T> disabled = rejectWriteIfDisabled();
+        if (disabled != null) {
+            return disabled;
+        }
+        Result<T> unsafe = rejectUnsafeBatchWriteConfig(operationType, operator, traceId);
+        if (unsafe != null) {
+            return unsafe;
+        }
+        Result<T> unconfirmed =
+                rejectBatchWriteIfConfirmationMissing(operationType, operator, traceId, confirmOperation);
+        if (unconfirmed != null) {
+            return unconfirmed;
+        }
+        return forbidIfNeeded(TASK_BATCH_OPERATION, operator, null, true, traceId);
+    }
+
+    private <T> Result<T> rejectUnsafeTaskWriteConfig(String operationType, String operator,
+                                                      Long taskId, String traceId) {
+        if (!authEnabled) {
+            String message = "Admin write operation requires reliable-task.admin.auth.enabled=true";
+            recordAdminAudit(operationType, operator, taskId, "write precondition", "FAILED", message, traceId);
+            return Result.error(403, message);
+        }
+        if (!auditEnabled) {
+            return Result.error(403,
+                    "Admin write operation requires reliable-task.admin.audit.enabled=true");
+        }
+        return null;
+    }
+
+    private <T> Result<T> rejectUnsafeBatchWriteConfig(String operationType, String operator, String traceId) {
+        if (!authEnabled) {
+            String message = "Admin write operation requires reliable-task.admin.auth.enabled=true";
+            recordBatchAudit(operationType, operator, null, "write precondition", "FAILED", message, traceId);
+            return Result.error(403, message);
+        }
+        if (!auditEnabled) {
+            return Result.error(403,
+                    "Admin write operation requires reliable-task.admin.audit.enabled=true");
+        }
+        return null;
+    }
+
+    private <T> Result<T> rejectTaskWriteIfConfirmationMissing(String operationType, String operator,
+                                                               Long taskId, String traceId,
+                                                               String confirmOperation) {
+        if (!writeConfirmationRequired || isConfirmed(confirmOperation)) {
+            return null;
+        }
+        String message = "X-Confirm-Operation: true is required";
+        recordAdminAudit(operationType, operator, taskId, "write confirmation", "FAILED", message, traceId);
+        return Result.error(400, message);
+    }
+
+    private <T> Result<T> rejectBatchWriteIfConfirmationMissing(String operationType, String operator,
+                                                                String traceId, String confirmOperation) {
+        if (!writeConfirmationRequired || isConfirmed(confirmOperation)) {
+            return null;
+        }
+        String message = "X-Confirm-Operation: true is required";
+        recordBatchAudit(operationType, operator, null, "write confirmation", "FAILED", message, traceId);
+        return Result.error(400, message);
+    }
+
+    private boolean isConfirmed(String confirmOperation) {
+        return confirmOperation != null && "true".equalsIgnoreCase(confirmOperation.trim());
     }
 
     private <T> Result<T> forbidIfNeeded(String action, String operator, Long taskId,
@@ -853,6 +1090,13 @@ public class TaskAdminController {
             return hardMax;
         }
         return Math.min(configuredMax, hardMax);
+    }
+
+    private int normalizePayloadPreviewLength(int configuredLength) {
+        if (configuredLength <= 0) {
+            return DEFAULT_PAYLOAD_PREVIEW_LENGTH;
+        }
+        return configuredLength;
     }
 
     private String requestSummary(BatchOperationRequest request) {

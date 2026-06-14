@@ -219,7 +219,7 @@
     {
       "name": "reliable-task.admin.write-enabled",
       "type": "java.lang.Boolean",
-      "description": "Whether Admin write operations such as retry, cancel, requeue, payload update, and batch operations are enabled. Disabled by default for safer starter adoption.",
+      "description": "Whether Admin write operations such as retry, cancel, requeue, payload update, and batch operations are enabled. Even when enabled, writes require auth.enabled=true, audit.enabled=true, and X-Confirm-Operation=true when confirmation is required.",
       "defaultValue": false
     },
     {
@@ -279,13 +279,13 @@
     {
       "name": "reliable-task.admin.audit.enabled",
       "type": "java.lang.Boolean",
-      "description": "Whether Admin operation audit logging is enabled.",
+      "description": "Whether Admin operation audit logging is enabled. Required for Admin write operations when write-enabled=true.",
       "defaultValue": false
     },
     {
       "name": "reliable-task.admin.auth.enabled",
       "type": "java.lang.Boolean",
-      "description": "Whether Admin authorization checks are enabled. Enabled by default when Admin APIs are explicitly registered.",
+      "description": "Whether Admin authorization checks are enabled. Enabled by default when Admin APIs are explicitly registered and required for Admin write operations when write-enabled=true.",
       "defaultValue": true
     },
     {
@@ -293,6 +293,24 @@
       "type": "java.lang.Boolean",
       "description": "Whether Admin batch operation APIs are enabled.",
       "defaultValue": false
+    },
+    {
+      "name": "reliable-task.admin.console.payload-plaintext-enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether console-safe task detail responses may include payload plaintext. Disabled by default.",
+      "defaultValue": false
+    },
+    {
+      "name": "reliable-task.admin.console.payload-preview-length",
+      "type": "java.lang.Integer",
+      "description": "Maximum payload preview length returned by console-safe task detail responses.",
+      "defaultValue": 512
+    },
+    {
+      "name": "reliable-task.admin.console.write-confirmation-required",
+      "type": "java.lang.Boolean",
+      "description": "Whether console write operations require X-Confirm-Operation=true.",
+      "defaultValue": true
     }
   ]
 }

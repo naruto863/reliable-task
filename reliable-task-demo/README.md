@@ -46,7 +46,7 @@ export RELIABLE_TASK_DATASOURCE_USERNAME="reliable_task_user"
 export RELIABLE_TASK_DATASOURCE_PASSWORD="change_me"
 ```
 
-`application-example.yml` 为了本地演示显式开启 Admin：`reliable-task.admin.enabled=true`、`write-enabled=true`、`auth.enabled=false`。这只是 Demo opt-in 配置；生产默认仍是 Admin REST API 关闭、写接口关闭、权限检查开启。
+`application-example.yml` 为了本地演示显式开启 Admin：`reliable-task.admin.enabled=true`、`write-enabled=true`、`auth.enabled=false`。示例同时保持 `audit.enabled=false` 和 `batch.enabled=false`，因此 v0.7 控制台会展示只读排障视图，并禁用写操作按钮。生产默认仍是 Admin REST API 关闭、写接口关闭、权限检查开启。
 
 ## 本地演示与生产默认差异
 
@@ -63,6 +63,32 @@ export RELIABLE_TASK_DATASOURCE_PASSWORD="change_me"
 ```bash
 mvn -pl reliable-task-demo -am spring-boot:run
 ```
+
+## 启动 Web 控制台预览版
+
+另开一个终端进入独立前端工程：
+
+```bash
+cd reliable-task-console
+npm install
+npm run dev
+```
+
+访问 `http://localhost:5173`。Vite dev server 默认把 `/api/reliable-task` 代理到 `http://localhost:8080`，与上面的 Demo 后端端口一致。若后端端口不同，可以创建 `reliable-task-console/.env.local`：
+
+```bash
+VITE_RELIABLE_TASK_PROXY_TARGET=http://localhost:8080
+```
+
+控制台常见状态：
+
+- `API unreachable`：Demo 后端未启动，或 Vite proxy target 不正确。
+- `Admin disabled`：未引入 Admin starter，或未启用 `reliable-task.admin.enabled=true`。
+- `Access denied`：后端权限检查拒绝当前 `X-Operator`。
+- `Audit log is disabled`：示例默认 `audit.enabled=false`，审计页面和写操作安全门禁会显示禁用原因。
+- `Reveal disabled`：示例默认不返回 payload 明文，详情页只展示 console-safe preview。
+
+如需仅在本地演示写操作 UI，需要同时启用 `write-enabled=true`、`auth.enabled=true`、`audit.enabled=true`，并提供本地可用的授权实现和审计存储。不要把这种本地配置作为生产建议。
 
 ## 验证接口
 

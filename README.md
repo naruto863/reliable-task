@@ -12,7 +12,7 @@ recovers timed-out executions, and exposes admin APIs for operational visibility
 [![CI](https://github.com/naruto863/reliable-task/actions/workflows/ci.yml/badge.svg)](https://github.com/naruto863/reliable-task/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-> ReliableTask is currently on preview release `v0.6.0`. APIs, configuration, and database schema may evolve before `v1.0.0`.
+> ReliableTask is currently on preview release `v0.7.0`. APIs, configuration, and database schema may evolve before `v1.0.0`.
 
 ## Table of Contents
 
@@ -223,9 +223,28 @@ curl -H "X-Operator: admin" "http://localhost:8080/api/reliable-task/tasks/stats
 
 More demo requests are documented in [reliable-task-demo/README.md](reliable-task-demo/README.md).
 
+### 7. Run the local console preview
+
+With the demo backend still running on `http://localhost:8080`, start the standalone v0.7 console:
+
+```bash
+cd reliable-task-console
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`. The Vite dev server proxies `/api/reliable-task` to the demo backend by
+default. Override `VITE_RELIABLE_TASK_PROXY_TARGET` in `reliable-task-console/.env.local` if the
+backend runs elsewhere.
+
+The demo configuration is intended for local exploration. Because audit and authorization are not
+enabled in `application-example.yml`, the console shows read-only troubleshooting views and disables
+write buttons with the backend reason. Production write access still requires auth, audit,
+`X-Confirm-Operation: true`, network controls, and operator accountability.
+
 ## Installation
 
-ReliableTask `0.6.0` is not published to Maven Central yet. For this preview release, use a source build, local Maven installation, or a private Maven repository.
+ReliableTask `0.7.0` is not published to Maven Central yet. For this preview release, use a source build, local Maven installation, or a private Maven repository.
 
 ```bash
 mvn -B -DskipTests install
@@ -237,7 +256,7 @@ For a worker-only application, depend on the Spring Boot starter:
 <dependency>
     <groupId>com.reliabletask</groupId>
     <artifactId>reliable-task-spring-boot-starter</artifactId>
-    <version>0.6.0</version>
+    <version>0.7.0</version>
 </dependency>
 ```
 
@@ -247,9 +266,14 @@ If the application also needs Admin REST APIs, add the Admin starter explicitly:
 <dependency>
     <groupId>com.reliabletask</groupId>
     <artifactId>reliable-task-admin-spring-boot-starter</artifactId>
-    <version>0.6.0</version>
+    <version>0.7.0</version>
 </dependency>
 ```
+
+The v0.7 console preview is a separate frontend under `reliable-task-console`. It is not required by
+worker-only applications and is not bundled into either Spring Boot starter. Deploy the built `dist/`
+assets behind an internal reverse proxy that forwards `/api/reliable-task` to an Admin-enabled
+application.
 
 ### Minimal Configuration
 
@@ -293,11 +317,16 @@ reliable-task:
       enabled: true
     batch:
       enabled: false
+    console:
+      payload-plaintext-enabled: false
+      payload-preview-length: 512
+      write-confirmation-required: true
 ```
 
-The runnable demo explicitly opts in to Admin APIs with `admin.enabled=true`, `write-enabled=true`,
-and `auth.enabled=false` for local exploration. Those demo settings are not production defaults.
-Admin REST APIs require the `reliable-task-admin-spring-boot-starter` dependency in addition to
+The runnable demo explicitly opts in to Admin APIs for local exploration. Those demo settings are
+not production defaults. From v0.7, Admin write APIs still refuse mutations unless writes,
+authorization, audit logging, and the confirmation header are all enabled. Admin REST APIs require
+the `reliable-task-admin-spring-boot-starter` dependency in addition to
 `reliable-task.admin.enabled=true`.
 
 ### Implement a TaskHandler
@@ -442,7 +471,7 @@ ReliableTask properties use the `reliable-task` prefix.
 | `reliable-task.metrics.stats-cache-ttl-ms` | `5000` | Cache TTL for task stats gauges, so one scrape does not repeatedly query task stats. |
 | `reliable-task.alert.enabled` | `false` | Enables alert scanning. |
 | `reliable-task.admin.enabled` | `false` | Registers Admin REST APIs when explicitly enabled; write operations are controlled separately. |
-| `reliable-task.admin.write-enabled` | `false` | Enables Admin write APIs such as retry, cancel, requeue, payload update, and batch operations. |
+| `reliable-task.admin.write-enabled` | `false` | Enables Admin write APIs such as retry, cancel, requeue, payload update, and batch operations. When enabled, writes still require auth, audit, and confirmation checks. |
 | `reliable-task.admin.max-page-size` | `200` | Upper bound for Admin list page sizes. |
 | `reliable-task.admin.max-batch-limit` | `1000` | Upper bound for Admin batch operation limits. |
 | `reliable-task.admin.query.default-window-hours` | `24` | Default time window for new operational Admin queries when no explicit time range is provided. |
@@ -450,16 +479,19 @@ ReliableTask properties use the `reliable-task` prefix.
 | `reliable-task.admin.query.default-limit` | `50` | Default row limit for new operational Admin queries. |
 | `reliable-task.admin.query.max-limit` | `200` | Maximum row limit for new operational Admin queries. |
 | `reliable-task.admin.query.slow-threshold-ms` | `30000` | Default slow-task threshold in milliseconds for slow-task operational queries. |
-| `reliable-task.admin.auth.enabled` | `true` | Enables admin authorization SPI checks when Admin APIs are registered. |
-| `reliable-task.admin.audit.enabled` | `false` | Enables admin operation auditing and audit-log query endpoints. |
+| `reliable-task.admin.auth.enabled` | `true` | Enables admin authorization SPI checks when Admin APIs are registered. Required for write operations. |
+| `reliable-task.admin.audit.enabled` | `false` | Enables admin operation auditing and audit-log query endpoints. Required for write operations. |
 | `reliable-task.admin.batch.enabled` | `false` | Enables limited batch operation APIs. Disabled endpoints return 404. |
+| `reliable-task.admin.console.payload-plaintext-enabled` | `false` | Allows console-safe detail responses to include payload plaintext. Disabled by default. |
+| `reliable-task.admin.console.payload-preview-length` | `512` | Maximum length for console-safe payload preview. |
+| `reliable-task.admin.console.write-confirmation-required` | `true` | Requires `X-Confirm-Operation: true` for Admin write operations. |
 
 The `admin.query.*` defaults apply to v0.5 operational queries such as recent failures,
 slow tasks, failure aggregation, and timeline-related list views. Existing `/tasks` and
 `/audit-logs` list APIs keep their compatible filtering behavior and do not receive an
 implicit 24-hour time window.
 
-Reserved compatibility properties are still bindable but are not wired to behavior in `0.6.0`: `reliable-task.serializer.type` does not switch serializers, so provide a `TaskPayloadSerializer` bean instead; `reliable-task.store.table-prefix` does not change MyBatis table names; `reliable-task.admin.port` and `reliable-task.admin.context-path` do not create a separate management server or change the current `/api/reliable-task` mapping.
+Reserved compatibility properties are still bindable but are not wired to behavior in `0.7.0`: `reliable-task.serializer.type` does not switch serializers, so provide a `TaskPayloadSerializer` bean instead; `reliable-task.store.table-prefix` does not change MyBatis table names; `reliable-task.admin.port` and `reliable-task.admin.context-path` do not create a separate management server or change the current `/api/reliable-task` mapping.
 
 For v0.6 integrations, storage extensions should depend on the narrowest Store SPI they need: `TaskCommandStore` for submit/claim/state changes, `TaskQueryStore` for read-only Admin/metrics/alert queries, and `TaskOperationsStore` for operational actions such as heartbeat and Admin writes. The old `TaskStore` remains as a compatibility facade that extends the narrower interfaces.
 
@@ -528,7 +560,7 @@ Before using ReliableTask outside a demo environment:
 - Handler idempotency: define the business idempotency key for every task type, protect external side effects, set explicit HTTP/RPC timeouts, and separate retryable from non-retryable failures.
 - Payload and diagnostics: do not store credentials, tokens, private keys, raw personal identifiers, or sensitive customer data in task payloads, error messages, audit details, idempotency keys, or logs.
 - Lease and recovery: set `worker.lock-ttl-seconds` and handler `timeoutMs()` according to real handler duration; verify recovery behavior with MySQL integration tests before relying on it.
-- Admin security: keep Admin APIs on an internal operations network, keep `reliable-task.admin.auth.enabled=true`, keep write APIs disabled unless needed, and require authentication, authorization, audit logging, network controls, and operator accountability before enabling writes.
+- Admin security: keep Admin APIs on an internal operations network, keep `reliable-task.admin.auth.enabled=true`, keep write APIs disabled unless needed, and require authentication, authorization, audit logging, `X-Confirm-Operation: true`, network controls, and operator accountability before enabling writes.
 - Observability: enable logs, metrics, alerts, and dashboards for pending backlog, oldest pending age, retry rate, dead tasks, recovery resets, stale workers, and worker capacity; tune thresholds from the [monitoring guide](docs/operations/reliable-task-monitoring.md) and [Prometheus example](docs/operations/prometheus-alerts-example.yml) instead of copying placeholders blindly.
 - Runbook: rehearse the [production runbook](docs/operations/reliable-task-runbook.md) for backlog growth, dead-task spikes, retry storms, recovery spikes, stale workers, and Admin write operations.
 - Verification: run `mvn -B test` and at least one real MySQL integration profile (`mysql-it` or `mysql-local-it`) before release; document any environment-blocked validation separately.
@@ -538,7 +570,7 @@ Before using ReliableTask outside a demo environment:
 - Do not commit real `application.yml`, `.env`, database credentials, tokens, cookies, internal URLs, or private keys.
 - Keep local configuration in ignored files or environment variables.
 - `application-example.yml` and `.env.example` must contain placeholders only.
-- Admin REST APIs are disabled by default. Enable `reliable-task.admin.enabled=true` only for local demos or protected internal operations, keep `reliable-task.admin.auth.enabled=true` in production, and enable `reliable-task.admin.write-enabled=true` only with authentication, authorization, audit logging, monitoring, and network access controls.
+- Admin REST APIs are disabled by default. Enable `reliable-task.admin.enabled=true` only for local demos or protected internal operations. Write operations require `reliable-task.admin.write-enabled=true`, `reliable-task.admin.auth.enabled=true`, `reliable-task.admin.audit.enabled=true`, and `X-Confirm-Operation: true` when confirmation is required; production deployments also need monitoring and network access controls.
 - Report vulnerabilities through [SECURITY.md](SECURITY.md). Do not disclose exploitable details in public issues.
 
 ## Testing
@@ -586,7 +618,7 @@ The repository keeps only `.env.example` and `application-example.yml` with plac
 ### Can Admin APIs be exposed directly in production?
 
 No. Admin write APIs are disabled by default and must not be exposed directly to the public internet.
-Production deployments that enable `reliable-task.admin.enabled=true` should keep authorization checks enabled. If they also enable `reliable-task.admin.write-enabled=true`, they must add authentication, authorization, audit logging, network access control, and monitoring.
+Production deployments that enable `reliable-task.admin.enabled=true` should keep authorization checks enabled. If they also enable `reliable-task.admin.write-enabled=true`, the server requires auth, audit, and `X-Confirm-Operation: true` by default, and the deployment must still provide authentication, authorization, network access control, and monitoring.
 
 ### Is the current preview available on Maven Central?
 
@@ -600,10 +632,10 @@ Breaking changes, security fixes, and migration notes should be recorded in [CHA
 ## Release
 
 - Versioning follows SemVer.
-- Git tags use `vX.Y.Z`, for example `v0.6.0`.
+- Git tags use `vX.Y.Z`, for example `v0.7.0`.
 - Release notes are maintained in [CHANGELOG.md](CHANGELOG.md) and [docs/releases](docs/releases).
 - The release process is documented in [docs/release-process.md](docs/release-process.md).
-- The latest preview release is `v0.6.0`.
+- The latest preview release is `v0.7.0`.
 
 ## Contributing
 
