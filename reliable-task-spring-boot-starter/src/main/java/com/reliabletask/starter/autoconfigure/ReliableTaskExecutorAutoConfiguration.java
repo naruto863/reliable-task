@@ -149,6 +149,7 @@ public class ReliableTaskExecutorAutoConfiguration {
     public ThreadPoolProperties threadPoolProperties(ReliableTaskProperties properties) {
         ReliableTaskProperties.Executor ep = properties.getExecutor();
         ThreadPoolProperties poolProps = new ThreadPoolProperties();
+        poolProps.setMode(ep.getMode());
         poolProps.setDefaultCoreSize(ep.getDefaultCoreSize());
         poolProps.setDefaultMaxSize(ep.getDefaultMaxSize());
         poolProps.setDefaultQueueCapacity(ep.getDefaultQueueCapacity());

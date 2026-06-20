@@ -1,6 +1,10 @@
 # ReliableTask Console
 
-ReliableTask Console is the standalone Vue/Vite preview console for v0.7.
+ReliableTask Console is the standalone Vue/Vite preview console for the v1.0 release line.
+
+For the broader v1.0 scenario map, see [ReliableTask v1.0 Example Matrix](../docs/v1.0/RELIABLE_TASK_V10_EXAMPLE_MATRIX.md). It links console-safe troubleshooting, Admin safeguards, monitoring and migration examples without embedding production credentials or private URLs.
+
+For preview scope, Admin safety boundaries and non-goals, see [Console and Admin Roadmap](../docs/console-admin-roadmap.md).
 
 ## Local Development
 

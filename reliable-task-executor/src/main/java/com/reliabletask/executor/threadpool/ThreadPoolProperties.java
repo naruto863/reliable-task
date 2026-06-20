@@ -15,6 +15,14 @@ import java.util.Map;
 public class ThreadPoolProperties {
 
     /**
+     * 执行器模式。
+     *
+     * <p>默认使用传统平台线程池；virtual 模式使用 JDK 21 虚拟线程，
+     * 并通过 maxSize 控制同一执行器的最大并发任务数。
+     */
+    private ExecutionMode mode = ExecutionMode.PLATFORM;
+
+    /**
      * 默认核心线程数
      */
     private int defaultCoreSize = 4;
@@ -41,6 +49,11 @@ public class ThreadPoolProperties {
      * 未在 map 中配置的 taskType 使用 default 线程池。
      */
     private Map<String, PoolConfig> pools = new HashMap<>();
+
+    public enum ExecutionMode {
+        PLATFORM,
+        VIRTUAL
+    }
 
     /**
      * 单个 taskType 的线程池配置

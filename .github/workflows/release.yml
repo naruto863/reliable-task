@@ -1,0 +1,163 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Release mode"
+        required: true
+        type: choice
+        default: dry-run
+        options:
+          - dry-run
+          - publish
+      version:
+        description: "Release version, for operator traceability"
+        required: true
+        type: string
+        default: "1.0.0"
+      run-mysql-it:
+        description: "Run Testcontainers MySQL integration tests"
+        required: false
+        type: boolean
+        default: false
+      run-console-smoke:
+        description: "Run console typecheck/lint/test/build and Playwright smoke"
+        required: false
+        type: boolean
+        default: false
+      run-security-scan:
+        description: "Run dependency inventory and npm audit"
+        required: false
+        type: boolean
+        default: false
+      confirm-publish:
+        description: "Type PUBLISH to upload and auto-publish to Maven Central when mode=publish"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-dry-run:
+    name: Release Dry Run
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Guard publish confirmation
+        if: inputs.mode == 'publish' && inputs.confirm-publish != 'PUBLISH'
+        run: |
+          echo "::error::mode=publish requires confirm-publish=PUBLISH"
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Run Maven tests
+        run: mvn -B test
+
+      - name: Run release profile verify
+        run: mvn -B -Prelease -DskipTests verify
+
+      - name: Maven dependency inventory
+        if: inputs.run-security-scan
+        run: mvn -B -DskipTests org.apache.maven.plugins:maven-dependency-plugin:3.8.1:tree
+
+      - name: Run Testcontainers MySQL integration tests
+        if: inputs.run-mysql-it
+        run: mvn -B -Pmysql-it -pl reliable-task-store,reliable-task-executor -am test
+
+      - name: Set up Node.js 22
+        if: inputs.run-console-smoke || inputs.run-security-scan
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: reliable-task-console/package-lock.json
+
+      - name: Install console dependencies
+        if: inputs.run-console-smoke || inputs.run-security-scan
+        working-directory: reliable-task-console
+        run: npm ci
+
+      - name: Console npm audit
+        if: inputs.run-security-scan
+        working-directory: reliable-task-console
+        run: npm audit --audit-level=high --registry=https://registry.npmjs.org
+
+      - name: Console typecheck
+        if: inputs.run-console-smoke
+        working-directory: reliable-task-console
+        run: npm run typecheck
+
+      - name: Console lint
+        if: inputs.run-console-smoke
+        working-directory: reliable-task-console
+        run: npm run lint
+
+      - name: Console unit tests
+        if: inputs.run-console-smoke
+        working-directory: reliable-task-console
+        run: npm run test -- --run
+
+      - name: Console build
+        if: inputs.run-console-smoke
+        working-directory: reliable-task-console
+        run: npm run build
+
+      - name: Install Playwright Chromium
+        if: inputs.run-console-smoke
+        working-directory: reliable-task-console
+        run: npx playwright install chromium --with-deps
+
+      - name: Console smoke
+        if: inputs.run-console-smoke
+        working-directory: reliable-task-console
+        run: npm run test:smoke
+
+  maven-central-publish:
+    name: Maven Central Publish
+    runs-on: ubuntu-latest
+    needs: release-dry-run
+    if: inputs.mode == 'publish' && inputs.confirm-publish == 'PUBLISH'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21 and Maven Central credentials
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Publish to Maven Central
+        run: >
+          mvn -B -Prelease,release-sign -DskipTests
+          -Dgpg.skip=false
+          -Dcentral.skipPublishing=false
+          -Dcentral.autoPublish=true
+          deploy

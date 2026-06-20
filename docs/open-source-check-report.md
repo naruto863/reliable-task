@@ -1,72 +1,116 @@
-# ReliableTask 开源前检查报告
+# ReliableTask v1.0 Open Source Governance Report
 
-检查日期：2026-05-05
+- check_date: 2026-06-14
+- target_release: `v1.0.0`
+- baseline_version: `0.7.0`
+- scope: source tree, public docs, GitHub workflows, license/security/contribution files, Maven dependency inventory, Console npm audit, sensitive information scan
 
-## 仓库概况
+## Summary
 
-- 项目类型：Java 21 / Maven 多模块 / Spring Boot 3.2.5。
-- 核心模块：`reliable-task-core`、`reliable-task-store`、`reliable-task-executor`、`reliable-task-admin`、`reliable-task-spring-boot-starter`、`reliable-task-demo`。
-- 开源许可证：Apache License 2.0。
-- 首次公开版本：`v0.1.0`。
-- 当前发布方式：`main` 分支 + annotated tag，不创建额外 release 分支。
+ReliableTask has the repository governance files required for the v1.0 stable open-source release path:
 
-## 已补齐的开源文件
+- Apache-2.0 `LICENSE`.
+- `SECURITY.md` with supported version policy, private disclosure route and release-time security checks.
+- `CONTRIBUTING.md` with Java, Console, dependency inventory and npm audit validation commands.
+- `docs/community-onboarding.md` with issue routing, first contribution guidance, verification result labels and maintainer triage notes.
+- Issue and PR templates under `.github`.
+- CI, release dry-run, CodeQL and Dependabot configuration under `.github`.
+- Release process, upgrade guide, test matrix and example matrix under `docs`.
 
-- `README.md`
-- `LICENSE`
-- `CHANGELOG.md`
-- `CONTRIBUTING.md`
-- `SECURITY.md`
-- `.env.example`
-- `.gitignore`
-- `.github/pull_request_template.md`
-- `.github/ISSUE_TEMPLATE/bug_report.md`
-- `.github/ISSUE_TEMPLATE/feature_request.md`
-- `.github/workflows/ci.yml`
-- `docs/release-process.md`
-- `docs/releases/v0.1.0.md`
+Maven Central publication, tag creation and GitHub Release creation remain out of scope for this report. Those actions belong to TASK-013 and require explicit user authorization plus Central/GPG/GitHub credentials.
 
-## 敏感信息检查
+## Governance Files
 
-当前只读扫描发现并处理了 `.env.example` 中的非占位符数据库密码风险，已替换为 `change_me`。
+| Area | File | v1.0 status |
+| --- | --- | --- |
+| License | `LICENSE` | Apache-2.0; copyright holder normalized to ReliableTask contributors. |
+| Security policy | `SECURITY.md` | Supports v1.0 stable line after release closure, 0.7.x best-effort preview baseline, private disclosure and advisory route. |
+| Contribution guide | `CONTRIBUTING.md` | Documents Java, Console and dependency validation commands, SemVer, PR expectations and v1.0 release governance. |
+| Community onboarding | `docs/community-onboarding.md` | Documents issue routing, good first contributions, validation status labels and maintainer triage notes. |
+| PR template | `.github/pull_request_template.md` | Requires test, compatibility and security impact notes. |
+| Issue templates | `.github/ISSUE_TEMPLATE/*.md` | Bug reports require environment details and sanitized logs; feature requests ask for compatibility and schema cost. |
+| CI | `.github/workflows/ci.yml` | Runs Maven tests and Console typecheck/test/build by default; optional MySQL and Playwright smoke remain manual. |
+| Release workflow | `.github/workflows/release.yml` | Provides dry-run, optional MySQL, optional Console smoke, optional security scan and guarded Maven Central publish. |
+| Static analysis | `.github/workflows/codeql.yml` | Adds CodeQL for Java and JavaScript/TypeScript with extended security queries. |
+| Dependency updates | `.github/dependabot.yml` | Tracks Maven, npm and GitHub Actions weekly. |
 
-已确认的非敏感命中项：
+## Dependency Governance
 
-- `localhost`：Demo 和 README 的本地运行示例。
-- `change_me`：示例密码占位符。
-- `user@example.com`：文档中的示例邮箱。
-- `ORD-001`、`USER-123`：Demo curl 示例数据。
-- `https://github.com/naruto863/reliable-task/security/advisories/new`：公开 GitHub Security Advisory 提交入口。
+### Maven
 
-## 不应提交文件
+The old direct `mvn -B -DskipTests dependency:tree` command resolved `maven-dependency-plugin:2.8` and failed inside the multi-module reactor by trying to fetch `com.reliabletask:reliable-task-core:0.7.0` from the remote mirror.
 
-以下文件或目录存在于本地工作区，但应保持忽略：
+The v1.0 command is now pinned to the newer dependency plugin:
 
-- `.idea/`
-- `.m2/`
-- 各模块 `target/`
-- 各模块 Eclipse 元数据：`.classpath`、`.project`、`.factorypath`、`.settings/`
-- 本地 `.env`
-- 本地 `application.yml`、`application.yaml`、`application.properties`
+```bash
+mvn -B -DskipTests org.apache.maven.plugins:maven-dependency-plugin:3.8.1:tree
+```
 
-## CI 与测试
+2026-06-14 result: `PASS`. The command listed all eight reactor modules and completed with `BUILD SUCCESS`.
 
-- 基础 CI：`.github/workflows/ci.yml` 使用 Ubuntu、Temurin JDK 21、Maven cache，并执行 `mvn -B test`。
-- 本地构建状态：`mvn -B -DskipTests compile` 已通过，所有 Maven 模块主代码编译成功。
-- 本地测试状态：当前环境执行 `mvn -B test` 未通过验证，失败点在 Maven Surefire provider 依赖解析和本地 Maven 仓库写入权限，不是业务测试断言失败。
-- 复验现象：
-  - `D:\Code\Code\MavenRepo` 写入 `*.lastUpdated` / `*.part.lock` 被拒绝。
-  - 工作区 `.m2\repository` 下访问 `maven.aliyun.com` 解析 Spring Boot BOM 失败。
-  - 离线模式缺少 `org.apache.maven.surefire:surefire-junit-platform:3.5.2`。
-- 结论：发布前必须在网络和 Maven 仓库权限正常的环境，或 GitHub Actions 中重新执行 `mvn -B test` 并确认通过。
+### Console npm audit
 
-## 发布前剩余 TODO
+The first audit attempt against the local npm mirror failed because the mirror did not implement the audit API:
 
-- [ ] 在可联网且 Maven 仓库可写的环境执行 `mvn -B test` 并确认通过。
-- [ ] 确认远端仓库权限可以读取和推送 `origin`。
-- [ ] 确认远端 `v0.1.0` tag 尚不存在。
-- [ ] 创建 annotated tag 前再次确认无真实密钥、Token、Cookie、内部 URL 或真实用户数据。
+```bash
+npm audit --audit-level=high
+```
 
-## 综合结论
+2026-06-14 result: `BLOCKED_ENV` for the mirror endpoint, not a package result.
 
-仓库已具备首次开源预览的基础治理结构，发布准备文件已按 `v0.1.0` 对齐。当前不建议跳过测试直接发布；最小发布门槛是让 `mvn -B test` 在干净环境或 GitHub Actions 中通过，并确认远端 tag 状态。
+The audit was rerun against the official npm registry:
+
+```bash
+npm audit --audit-level=high --registry=https://registry.npmjs.org
+```
+
+Initial result: `FAIL_CODE`. The audit found high/critical development-toolchain advisories in the Console chain around `vite`/`esbuild`/`vitest` plus a `glob` advisory.
+
+Fix applied:
+
+- non-forced `npm audit fix` to update safe transitive packages;
+- upgraded direct Console dev dependencies to `vite ^8.0.16`, `@vitejs/plugin-vue ^6.0.7` and `vitest ^4.1.8`;
+- removed accidental direct internal dependencies after the upgrade.
+
+Post-fix result: `PASS`, `found 0 vulnerabilities`.
+
+Regression checks after the toolchain upgrade:
+
+- `PASS`: `npm run typecheck`.
+- `PASS`: `npm run test -- --run`, 15 test files and 49 tests passed.
+- `PASS`: `npm run build`, Vite production build completed.
+
+## Sensitive Information Scan
+
+Command:
+
+```bash
+rg -n "password|passwd|secret|token|private key|BEGIN .* KEY|jdbc:mysql://|AKIA|ghp_" .
+```
+
+2026-06-14 classification:
+
+- `PASS_WITH_FALSE_POSITIVES`: no real credential, token, private key, production database URL, internal host, cookie or real user data was identified.
+- Expected example hits: `.env.example`, README/demo local `jdbc:mysql://localhost` examples, local MySQL integration-test property names, release-process secret names and Console/Admin redaction tests.
+- Expected package-name hits: `css-tokenizer`, `js-tokens` and similar npm package names in `package-lock.json`.
+- Expected security guidance hits: documentation warning users not to commit passwords, tokens, private keys or credentials.
+
+Before TASK-013 release closure, rerun the same command after release notes and readiness report are finalized.
+
+## Static Analysis and Advisory Path
+
+- CodeQL is configured for pull requests, pushes to `main`, weekly schedule and manual dispatch.
+- Dependabot is configured for Maven, npm and GitHub Actions.
+- CodeQL and Dependabot require GitHub-side execution after these workflow files are committed and pushed; local validation can only verify file content and diff hygiene.
+- Release workflow `run-security-scan=true` gives maintainers a manual pre-release dependency snapshot without making ordinary PRs depend on network-heavy scans.
+
+## Release Caveats
+
+- Real Maven Central publish, Central close/release, GitHub tag and GitHub Release are not performed by this task.
+- CodeQL results are not available until the workflow is present on GitHub and runs there.
+- Dependabot alerts require repository-side Dependabot/security settings to be enabled.
+- Real MySQL readiness remains governed by the TASK-003/TASK-004 caveat: Testcontainers Docker or local MySQL profile must pass before release notes can claim real MySQL validation.
+
+## Conclusion
+
+The v1.0 open-source governance path is ready for the readiness task: static analysis and dependency-update workflows are defined, dependency inventory/audit commands are documented, the Console npm audit findings were fixed and regression-checked, and sensitive scan results are classified as non-secret false positives.

@@ -19,6 +19,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @DisplayName("数据库初始化迁移 smoke test")
@@ -51,6 +52,15 @@ class MigrationSmokeTest {
             "idx_batch_status_create_time",
             "idx_batch_operator_create_time"
     };
+
+    @Test
+    @DisplayName("schema.sql 与 Flyway V1 初始脚本保持一致")
+    void schemaSqlAndFlywayV1_areByteIdentical() throws Exception {
+        String schemaSql = readSqlResource("db/schema.sql");
+        String flywayV1 = readSqlResource("db/migration/V1__init_reliable_task_schema.sql");
+
+        assertEquals(schemaSql, flywayV1, "schema.sql and Flyway V1 must describe the same v1.0 baseline");
+    }
 
     @Test
     @DisplayName("schema.sql 在 H2 MySQL mode 下可执行")
@@ -105,18 +115,22 @@ class MigrationSmokeTest {
     }
 
     private void executeSqlResource(Connection connection, String resourcePath) throws Exception {
+        String sqlScript = readSqlResource(resourcePath);
+        try (Statement statement = connection.createStatement()) {
+            for (String sql : sqlScript.split(";")) {
+                if (!sql.isBlank()) {
+                    statement.execute(sql);
+                }
+            }
+        }
+    }
+
+    private String readSqlResource(String resourcePath) throws Exception {
         try (InputStream inputStream = getClass().getClassLoader().getResourceAsStream(resourcePath)) {
             if (inputStream == null) {
                 throw new IllegalStateException("Resource not found: " + resourcePath);
             }
-            String sqlScript = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
-            try (Statement statement = connection.createStatement()) {
-                for (String sql : sqlScript.split(";")) {
-                    if (!sql.isBlank()) {
-                        statement.execute(sql);
-                    }
-                }
-            }
+            return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
         }
     }
 

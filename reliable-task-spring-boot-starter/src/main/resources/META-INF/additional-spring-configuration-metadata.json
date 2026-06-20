@@ -97,6 +97,12 @@
       "defaultValue": 100
     },
     {
+      "name": "reliable-task.executor.mode",
+      "type": "com.reliabletask.executor.threadpool.ThreadPoolProperties$ExecutionMode",
+      "description": "Task execution mode. PLATFORM uses bounded platform thread pools. VIRTUAL uses JDK 21 virtual threads; max-size becomes the concurrency limit, while core-size and queue-capacity are retained for configuration compatibility but do not define a virtual-thread queue.",
+      "defaultValue": "PLATFORM"
+    },
+    {
       "name": "reliable-task.executor.default-core-size",
       "type": "java.lang.Integer",
       "description": "Default core thread count for task execution pools.",

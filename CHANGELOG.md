@@ -6,7 +6,36 @@ This project follows Semantic Versioning.
 
 ## [Unreleased]
 
-No changes yet.
+## [1.0.0] - TBD
+
+### Added
+
+- Add the v1.0 scope, non-scope, API/SPI freeze inventory, compatibility strategy, validation matrix, and stop boundaries in `docs/v1.0/RELIABLE_TASK_V10_SCOPE.md`.
+- Add the v1.0 API/SPI compatibility policy and test evidence matrix in `docs/v1.0/RELIABLE_TASK_V10_API_COMPATIBILITY.md`.
+- Add the v1.0 reliability and release test matrix in `docs/v1.0/RELIABLE_TASK_V10_TEST_MATRIX.md`.
+- Add the v1.0 schema strategy and schema-first upgrade guide in `docs/v1.0/RELIABLE_TASK_V10_SCHEMA_STRATEGY.md` and `docs/migration/v1.0-upgrade-guide.md`.
+- Expand the v1.0 upgrade guide with compatibility, deprecated API, schema, configuration, Maven Central readiness and rollback guidance, and link it from both README files.
+- Add Maven Central release metadata, release dry-run profile, release workflow, and v1.0 example matrix.
+- Add CodeQL, Dependabot, v1.0 open-source governance report, readiness report, and release notes draft.
+- Add opt-in `reliable-task.executor.mode=virtual` for JDK 21 virtual-thread task execution while keeping `platform` as the default mode.
+
+### Changed
+
+- Align README, README.zh-CN, demo, console, operations, release process, and CHANGELOG around the v1.0 stable release narrative while preserving the fact that Maven Central publication is pending release closure.
+- Upgrade the Spring Boot dependency-management baseline from 3.2.5 to 3.5.14 while keeping the existing MyBatis-Plus baseline unchanged.
+- Confirm Java 21 as the only supported runtime baseline for the v1.0 line.
+- Upgrade the Console Vite/Vitest toolchain to clear high-severity npm audit findings while preserving typecheck, unit test, build, and smoke coverage.
+
+### Security
+
+- Add Java and JavaScript/TypeScript CodeQL configuration.
+- Add Dependabot coverage for Maven, npm and GitHub Actions.
+- Document and validate Maven dependency inventory, Console npm audit and sensitive information scan results.
+
+### Release Status
+
+- Maven Central publication, Git tag, GitHub Release, and post-release Central dependency verification remain pending TASK-013 and must not be claimed before execution.
+- Real MySQL validation is still environment-blocked in the current local run until Docker/Testcontainers or a disposable local MySQL test database is available.
 
 ## [0.7.0] - 2026-06-14
 
@@ -134,6 +163,7 @@ No changes yet.
 - Keep real local configuration out of version control and use placeholder values in example configuration.
 
 [Unreleased]: https://github.com/naruto863/reliable-task/compare/v0.7.0...HEAD
+[1.0.0]: https://github.com/naruto863/reliable-task/compare/v0.7.0...HEAD
 [0.7.0]: https://github.com/naruto863/reliable-task/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/naruto863/reliable-task/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/naruto863/reliable-task/compare/v0.3.0...v0.5.0

@@ -51,6 +51,7 @@ import com.reliabletask.executor.template.TransactionAwareTaskTemplate;
 import com.reliabletask.executor.serializer.JacksonTaskPayloadSerializer;
 import com.reliabletask.executor.worker.WorkerProperties;
 import com.reliabletask.executor.worker.WorkerScheduler;
+import com.reliabletask.executor.threadpool.ThreadPoolProperties;
 import com.reliabletask.starter.metrics.MicrometerTaskMetricsRecorder;
 import com.reliabletask.starter.metrics.MicrometerTaskEventListener;
 import com.reliabletask.starter.config.ReliableTaskProperties;
@@ -479,7 +480,7 @@ class ReliableTaskExecutorAutoConfigurationTest {
     }
 
     @Test
-    @DisplayName("与 Spring Boot 默认 taskExecutor Bean 共存")
+    @DisplayName("与 Spring Boot 默认 applicationTaskExecutor Bean 共存")
     void springBootTaskExecutorBean_canCoexistWithReliableTaskExecutor() {
         new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(
@@ -489,7 +490,8 @@ class ReliableTaskExecutorAutoConfigurationTest {
                 .withUserConfiguration(TaskStoreTestConfiguration.class)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
-                    assertThat(context).hasBean("taskExecutor");
+                    assertThat(context).hasBean("applicationTaskExecutor");
+                    assertThat(context).hasSingleBean(org.springframework.core.task.AsyncTaskExecutor.class);
                     assertThat(context).hasBean("reliableTaskExecutor");
                     assertThat(context).hasSingleBean(TaskExecutor.class);
                 });
@@ -513,6 +515,7 @@ class ReliableTaskExecutorAutoConfigurationTest {
             assertThat(properties.getRetry().getJitterRatio()).isEqualTo(0.0D);
             assertThat(properties.getRetry().getMinDelayMs()).isEqualTo(0L);
             assertThat(properties.getRetry().getMaxDelayMs()).isEqualTo(300000L);
+            assertThat(properties.getExecutor().getMode()).isEqualTo(ThreadPoolProperties.ExecutionMode.PLATFORM);
             assertThat(properties.getSerializer().getType()).isEqualTo("JACKSON");
             assertThat(properties.getStore().getTablePrefix()).isEmpty();
             assertThat(properties.getWorker().getBackpressure().isEnabled()).isFalse();
@@ -555,6 +558,7 @@ class ReliableTaskExecutorAutoConfigurationTest {
                         "reliable-task.retry.jitter-ratio=0.25",
                         "reliable-task.retry.min-delay-ms=250",
                         "reliable-task.retry.max-delay-ms=120000",
+                        "reliable-task.executor.mode=virtual",
                         "reliable-task.serializer.type=CUSTOM",
                         "reliable-task.store.table-prefix=rt_",
                         "reliable-task.worker.backpressure.enabled=true",
@@ -598,6 +602,9 @@ class ReliableTaskExecutorAutoConfigurationTest {
                     assertThat(properties.getRetry().getJitterRatio()).isEqualTo(0.25D);
                     assertThat(properties.getRetry().getMinDelayMs()).isEqualTo(250L);
                     assertThat(properties.getRetry().getMaxDelayMs()).isEqualTo(120000L);
+                    assertThat(properties.getExecutor().getMode()).isEqualTo(ThreadPoolProperties.ExecutionMode.VIRTUAL);
+                    assertThat(context.getBean(ThreadPoolProperties.class).getMode())
+                            .isEqualTo(ThreadPoolProperties.ExecutionMode.VIRTUAL);
                     assertThat(properties.getSerializer().getType()).isEqualTo("CUSTOM");
                     assertThat(properties.getStore().getTablePrefix()).isEqualTo("rt_");
                     assertThat(properties.getWorker().getBackpressure().isEnabled()).isTrue();

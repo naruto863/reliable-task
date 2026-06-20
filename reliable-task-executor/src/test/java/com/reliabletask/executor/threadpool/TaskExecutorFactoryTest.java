@@ -5,8 +5,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -85,6 +89,51 @@ class TaskExecutorFactoryTest {
 
         assertEquals(4, tpe.getCorePoolSize());
         assertEquals(16, tpe.getMaximumPoolSize());
+    }
+
+    @Test
+    @DisplayName("virtual 模式 - 使用虚拟线程执行并按 maxSize 统计容量")
+    void virtualMode_usesVirtualThreadsAndBoundedCapacity() throws Exception {
+        ThreadPoolProperties props = new ThreadPoolProperties();
+        props.setMode(ThreadPoolProperties.ExecutionMode.VIRTUAL);
+        props.setDefaultMaxSize(1);
+        factory = new TaskExecutorFactory(props);
+
+        ExecutorService pool = factory.getExecutor("ANY_TYPE");
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicBoolean virtualThread = new AtomicBoolean(false);
+
+        Future<Boolean> future = pool.submit(() -> {
+            virtualThread.set(Thread.currentThread().isVirtual());
+            started.countDown();
+            return release.await(2, TimeUnit.SECONDS);
+        });
+
+        assertFalse(pool instanceof ThreadPoolExecutor);
+        assertEquals(1, factory.getMaxCapacity());
+        assertTrue(started.await(2, TimeUnit.SECONDS));
+        assertEquals(0, factory.getAvailableCapacity());
+
+        release.countDown();
+        assertTrue(future.get(2, TimeUnit.SECONDS));
+
+        assertTrue(virtualThread.get());
+        assertEquals(1, factory.getAvailableCapacity());
+    }
+
+    @Test
+    @DisplayName("virtual 模式 - 自定义 taskType 使用自己的 maxSize 容量")
+    void virtualMode_customPoolUsesConfiguredMaxSize() {
+        ThreadPoolProperties props = new ThreadPoolProperties();
+        props.setMode(ThreadPoolProperties.ExecutionMode.VIRTUAL);
+        props.setDefaultMaxSize(2);
+        props.setPools(Map.of("TYPE_A", new ThreadPoolProperties.PoolConfig(4, 3, 50)));
+        factory = new TaskExecutorFactory(props);
+
+        assertEquals(5, factory.getMaxCapacity());
+        assertEquals(5, factory.getAvailableCapacity());
+        assertNotSame(factory.getExecutor("TYPE_A"), factory.getExecutor("UNKNOWN"));
     }
 
     @Test

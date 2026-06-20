@@ -273,3 +273,4 @@ venv.bak/
 docs/review/
 .config/gh/
 plans/codex_app/
+/AGENTS.md

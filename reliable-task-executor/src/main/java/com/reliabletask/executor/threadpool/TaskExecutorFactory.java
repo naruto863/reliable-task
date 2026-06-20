@@ -4,6 +4,7 @@ import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
 
@@ -17,7 +18,8 @@ import java.util.concurrent.*;
  *   <li>应用关闭时优雅关闭所有线程池</li>
  * </ul>
  *
- * <p>拒绝策略: CallerRunsPolicy（调用者线程执行，天然背压，防止任务丢失）
+ * <p>platform 模式拒绝策略: CallerRunsPolicy（调用者线程执行，天然背压，防止任务丢失）。
+ * virtual 模式使用 JDK 21 虚拟线程，并通过有界信号量保留 maxSize 并发上限语义。
  */
 @Slf4j
 @Component
@@ -28,12 +30,12 @@ public class TaskExecutorFactory {
     /**
      * default 线程池，处理未单独配置的 taskType
      */
-    private final ThreadPoolExecutor defaultPool;
+    private final ManagedExecutor defaultPool;
 
     /**
      * 按 taskType 隔离的独立线程池
      */
-    private final Map<String, ThreadPoolExecutor> customPools;
+    private final Map<String, ManagedExecutor> customPools;
 
     public TaskExecutorFactory(ThreadPoolProperties properties) {
         this.properties = properties;
@@ -58,7 +60,7 @@ public class TaskExecutorFactory {
         }
 
         log.info("TaskExecutorFactory initialized: defaultPool={}, customPools={}",
-                defaultPool, customPools.keySet());
+                defaultPool.executor(), customPools.keySet());
     }
 
     /**
@@ -70,8 +72,8 @@ public class TaskExecutorFactory {
      * @return 对应的线程池
      */
     public ExecutorService getExecutor(String taskType) {
-        ExecutorService pool = customPools.get(taskType);
-        return pool != null ? pool : defaultPool;
+        ManagedExecutor pool = customPools.get(taskType);
+        return pool != null ? pool.executor() : defaultPool.executor();
     }
 
     /**
@@ -80,41 +82,40 @@ public class TaskExecutorFactory {
      * <p>容量由剩余队列空间和可创建线程数共同组成，用于 Worker 拉取前背压。
      */
     public int getAvailableCapacity() {
-        int capacity = availableCapacity(defaultPool);
-        for (ThreadPoolExecutor pool : customPools.values()) {
-            capacity += availableCapacity(pool);
+        int capacity = defaultPool.availableCapacity();
+        for (ManagedExecutor pool : customPools.values()) {
+            capacity += pool.availableCapacity();
         }
         return Math.max(capacity, 0);
     }
 
     public int getMaxCapacity() {
-        int capacity = maxCapacity(defaultPool);
-        for (ThreadPoolExecutor pool : customPools.values()) {
-            capacity += maxCapacity(pool);
+        int capacity = defaultPool.maxCapacity();
+        for (ManagedExecutor pool : customPools.values()) {
+            capacity += pool.maxCapacity();
         }
         return Math.max(capacity, 0);
     }
 
-    private int availableCapacity(ThreadPoolExecutor pool) {
-        int remainingQueueCapacity = pool.getQueue().remainingCapacity();
-        int remainingThreadCapacity = pool.getMaximumPoolSize() - pool.getActiveCount();
-        return remainingQueueCapacity + Math.max(remainingThreadCapacity, 0);
-    }
-
-    private int maxCapacity(ThreadPoolExecutor pool) {
-        return pool.getMaximumPoolSize() + pool.getQueue().remainingCapacity() + pool.getQueue().size();
-    }
-
     /**
-     * 创建线程池
+     * 创建执行器
      *
      * @param name          线程池名称（用于日志和线程命名）
      * @param coreSize      核心线程数
      * @param maxSize       最大线程数
      * @param queueCapacity 队列容量
-     * @return 配置好的线程池
+     * @return 配置好的执行器
      */
-    private ThreadPoolExecutor createPool(String name, int coreSize, int maxSize, int queueCapacity) {
+    private ManagedExecutor createPool(String name, int coreSize, int maxSize, int queueCapacity) {
+        ThreadPoolProperties.ExecutionMode mode =
+                properties.getMode() != null ? properties.getMode() : ThreadPoolProperties.ExecutionMode.PLATFORM;
+        if (mode == ThreadPoolProperties.ExecutionMode.VIRTUAL) {
+            return createVirtualPool(name, maxSize);
+        }
+        return createPlatformPool(name, coreSize, maxSize, queueCapacity);
+    }
+
+    private ManagedExecutor createPlatformPool(String name, int coreSize, int maxSize, int queueCapacity) {
         ThreadPoolExecutor pool = new ThreadPoolExecutor(
                 coreSize,
                 maxSize,
@@ -127,7 +128,13 @@ public class TaskExecutorFactory {
         pool.allowCoreThreadTimeOut(true);
         log.info("Created thread pool: name={}, coreSize={}, maxSize={}, queueCapacity={}",
                 name, coreSize, maxSize, queueCapacity);
-        return pool;
+        return new PlatformManagedExecutor(pool);
+    }
+
+    private ManagedExecutor createVirtualPool(String name, int maxSize) {
+        BoundedVirtualExecutor executor = new BoundedVirtualExecutor(name, maxSize);
+        log.info("Created virtual thread executor: name={}, maxConcurrency={}", name, maxSize);
+        return executor;
     }
 
     /**
@@ -140,24 +147,140 @@ public class TaskExecutorFactory {
         log.info("Shutting down all thread pools...");
 
         shutdownPool(defaultPool, "default");
-        for (Map.Entry<String, ThreadPoolExecutor> entry : customPools.entrySet()) {
+        for (Map.Entry<String, ManagedExecutor> entry : customPools.entrySet()) {
             shutdownPool(entry.getValue(), entry.getKey());
         }
 
         log.info("All thread pools shut down");
     }
 
-    private void shutdownPool(ThreadPoolExecutor pool, String name) {
-        pool.shutdown();
+    private void shutdownPool(ManagedExecutor pool, String name) {
+        ExecutorService executor = pool.executor();
+        executor.shutdown();
         try {
-            if (!pool.awaitTermination(30, TimeUnit.SECONDS)) {
+            if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
                 log.warn("Thread pool '{}' did not terminate in 30s, forcing shutdown", name);
-                pool.shutdownNow();
+                executor.shutdownNow();
             }
         } catch (InterruptedException e) {
             log.warn("Interrupted while waiting for thread pool '{}' to terminate", name);
-            pool.shutdownNow();
+            executor.shutdownNow();
             Thread.currentThread().interrupt();
+        }
+    }
+
+    private interface ManagedExecutor {
+        ExecutorService executor();
+
+        int availableCapacity();
+
+        int maxCapacity();
+    }
+
+    private static class PlatformManagedExecutor implements ManagedExecutor {
+        private final ThreadPoolExecutor executor;
+
+        private PlatformManagedExecutor(ThreadPoolExecutor executor) {
+            this.executor = executor;
+        }
+
+        @Override
+        public ExecutorService executor() {
+            return executor;
+        }
+
+        @Override
+        public int availableCapacity() {
+            int remainingQueueCapacity = executor.getQueue().remainingCapacity();
+            int remainingThreadCapacity = executor.getMaximumPoolSize() - executor.getActiveCount();
+            return remainingQueueCapacity + Math.max(remainingThreadCapacity, 0);
+        }
+
+        @Override
+        public int maxCapacity() {
+            return executor.getMaximumPoolSize() + executor.getQueue().remainingCapacity() + executor.getQueue().size();
+        }
+    }
+
+    private static class BoundedVirtualExecutor extends AbstractExecutorService implements ManagedExecutor {
+        private final ExecutorService delegate;
+        private final Semaphore permits;
+        private final int maxConcurrency;
+
+        private BoundedVirtualExecutor(String name, int maxConcurrency) {
+            if (maxConcurrency <= 0) {
+                throw new IllegalArgumentException("Virtual executor maxSize must be positive");
+            }
+            this.maxConcurrency = maxConcurrency;
+            this.permits = new Semaphore(maxConcurrency);
+            ThreadFactory threadFactory = Thread.ofVirtual()
+                    .name("reliable-task-" + name + "-virtual-", 0)
+                    .factory();
+            this.delegate = Executors.newThreadPerTaskExecutor(threadFactory);
+        }
+
+        @Override
+        public ExecutorService executor() {
+            return this;
+        }
+
+        @Override
+        public int availableCapacity() {
+            return permits.availablePermits();
+        }
+
+        @Override
+        public int maxCapacity() {
+            return maxConcurrency;
+        }
+
+        @Override
+        public void shutdown() {
+            delegate.shutdown();
+        }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            return delegate.shutdownNow();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return delegate.isShutdown();
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return delegate.isTerminated();
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+            return delegate.awaitTermination(timeout, unit);
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            boolean acquired = false;
+            try {
+                permits.acquire();
+                acquired = true;
+                delegate.execute(() -> {
+                    try {
+                        command.run();
+                    } finally {
+                        permits.release();
+                    }
+                });
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RejectedExecutionException("Interrupted while waiting for virtual executor capacity", e);
+            } catch (RuntimeException e) {
+                if (acquired) {
+                    permits.release();
+                }
+                throw e;
+            }
         }
     }
 

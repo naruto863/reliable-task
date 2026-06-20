@@ -6,13 +6,13 @@ recovers timed-out executions, and exposes admin APIs for operational visibility
 
 [English](README.md) | [中文](README.zh-CN.md)
 
-[![Java](https://img.shields.io/badge/Java-17+-blue.svg)](https://openjdk.org/projects/jdk/17/)
-[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2.5-brightgreen.svg)](https://spring.io/projects/spring-boot)
+[![Java](https://img.shields.io/badge/Java-21+-blue.svg)](https://openjdk.org/projects/jdk/21/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5.14-brightgreen.svg)](https://spring.io/projects/spring-boot)
 [![MyBatis-Plus](https://img.shields.io/badge/MyBatis--Plus-3.5.6-orange.svg)](https://baomidou.com/)
 [![CI](https://github.com/naruto863/reliable-task/actions/workflows/ci.yml/badge.svg)](https://github.com/naruto863/reliable-task/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-> ReliableTask is currently on preview release `v0.7.0`. APIs, configuration, and database schema may evolve before `v1.0.0`.
+> ReliableTask is currently preparing the `v1.0.0` stable open-source release from the `v0.7.0` preview baseline. Maven Central installation is the v1.0 target and must not be treated as available until release closure confirms publication.
 
 ## Table of Contents
 
@@ -40,7 +40,7 @@ recovers timed-out executions, and exposes admin APIs for operational visibility
 ReliableTask is designed for business workflows where a database transaction must create durable follow-up work,
 such as sending notifications, issuing coupons, synchronizing data, or triggering compensation tasks.
 
-It is not a general-purpose message queue. The current preview focuses on a database-backed execution model:
+It is not a general-purpose message queue. The current implementation focuses on a database-backed execution model:
 write the business record and the task record in one transaction, then let workers claim, execute, retry, and recover tasks.
 
 ## Use Cases and Non-Goals
@@ -150,9 +150,9 @@ Production handlers should therefore be idempotent. Recommended patterns include
 
 | Tool | Version |
 | --- | --- |
-| Java | 17+ |
+| Java | 21+ |
 | Maven | 3.8+ |
-| Spring Boot | 3.2.5 |
+| Spring Boot | 3.5.14 |
 | MyBatis-Plus | 3.5.6 |
 | MySQL | 8.0+ |
 
@@ -225,7 +225,7 @@ More demo requests are documented in [reliable-task-demo/README.md](reliable-tas
 
 ### 7. Run the local console preview
 
-With the demo backend still running on `http://localhost:8080`, start the standalone v0.7 console:
+With the demo backend still running on `http://localhost:8080`, start the standalone console preview:
 
 ```bash
 cd reliable-task-console
@@ -244,11 +244,13 @@ write buttons with the backend reason. Production write access still requires au
 
 ## Installation
 
-ReliableTask `0.7.0` is not published to Maven Central yet. For this preview release, use a source build, local Maven installation, or a private Maven repository.
+For `v1.0.0` users, Maven Central is the primary installation path after release closure confirms publication.
 
-```bash
-mvn -B -DskipTests install
-```
+Until `v1.0.0` is visible on Maven Central, use a source build, local Maven installation, or a private Maven repository:
+
+Planning a v0.x to v1.0 upgrade? Start with the [v1.0 upgrade guide](docs/migration/v1.0-upgrade-guide.md), which covers compatibility-retained APIs, deprecated `TaskSerializer`, `TaskStore` migration guidance, schema initialization choices, Maven Central release status, validation commands, and rollback notes.
+
+For runnable scenarios, use the [v1.0 example matrix](docs/v1.0/RELIABLE_TASK_V10_EXAMPLE_MATRIX.md) to find success, retry, non-retryable failure, idempotency, dead-letter, Admin safety, monitoring, console and migration examples.
 
 For a worker-only application, depend on the Spring Boot starter:
 
@@ -256,7 +258,7 @@ For a worker-only application, depend on the Spring Boot starter:
 <dependency>
     <groupId>com.reliabletask</groupId>
     <artifactId>reliable-task-spring-boot-starter</artifactId>
-    <version>0.7.0</version>
+    <version>1.0.0</version>
 </dependency>
 ```
 
@@ -266,14 +268,23 @@ If the application also needs Admin REST APIs, add the Admin starter explicitly:
 <dependency>
     <groupId>com.reliabletask</groupId>
     <artifactId>reliable-task-admin-spring-boot-starter</artifactId>
-    <version>0.7.0</version>
+    <version>1.0.0</version>
 </dependency>
 ```
 
-The v0.7 console preview is a separate frontend under `reliable-task-console`. It is not required by
+Before Maven Central publication, build the current source tree locally:
+
+```bash
+mvn -B -DskipTests install
+```
+
+When consuming a preview build before `v1.0.0`, replace the dependency version with the locally installed or private repository version, such as `0.7.0`.
+
+The console preview is a separate frontend under `reliable-task-console`. It is not required by
 worker-only applications and is not bundled into either Spring Boot starter. Deploy the built `dist/`
 assets behind an internal reverse proxy that forwards `/api/reliable-task` to an Admin-enabled
-application.
+application. See the [Console and Admin roadmap](docs/console-admin-roadmap.md) for the preview scope,
+Admin safety boundary and non-goals.
 
 ### Minimal Configuration
 
@@ -300,6 +311,12 @@ reliable-task:
     jitter-ratio: 0.0
     min-delay-ms: 0
     max-delay-ms: 300000
+  executor:
+    mode: platform
+    default-core-size: 4
+    default-max-size: 16
+    default-queue-capacity: 100
+    keep-alive-seconds: 60
   admin:
     enabled: false
     write-enabled: false
@@ -324,7 +341,7 @@ reliable-task:
 ```
 
 The runnable demo explicitly opts in to Admin APIs for local exploration. Those demo settings are
-not production defaults. From v0.7, Admin write APIs still refuse mutations unless writes,
+not production defaults. Admin write APIs refuse mutations unless writes,
 authorization, audit logging, and the confirmation header are all enabled. Admin REST APIs require
 the `reliable-task-admin-spring-boot-starter` dependency in addition to
 `reliable-task.admin.enabled=true`.
@@ -466,6 +483,11 @@ ReliableTask properties use the `reliable-task` prefix.
 | `reliable-task.retry.jitter-ratio` | `0.0` | Jitter ratio for `EXPONENTIAL`; `0` disables jitter, valid range is `0..1`. |
 | `reliable-task.retry.min-delay-ms` | `0` | Minimum retry delay applied after strategy calculation. |
 | `reliable-task.retry.max-delay-ms` | `300000` | Default maximum retry delay when `@TaskRetryable.maxDelayMs` is not set. |
+| `reliable-task.executor.mode` | `platform` | Execution mode. `platform` uses bounded platform thread pools; `virtual` uses JDK 21 virtual threads and is opt-in. |
+| `reliable-task.executor.default-core-size` | `4` | Default core thread count for platform thread pools; retained for virtual-mode configuration compatibility. |
+| `reliable-task.executor.default-max-size` | `16` | Default maximum platform thread count; in virtual mode this is the maximum concurrent handler task count. |
+| `reliable-task.executor.default-queue-capacity` | `100` | Default queue capacity for platform thread pools; retained for compatibility and not used as a virtual-thread queue. |
+| `reliable-task.executor.keep-alive-seconds` | `60` | Platform thread keep-alive time in seconds. |
 | `reliable-task.metrics.enabled` | `false` | Enables Micrometer metrics recording. |
 | `reliable-task.metrics.include-worker-id-tag` | `false` | Adds `worker_id` to execution metrics only when explicitly enabled; disabled by default to avoid high-cardinality series. |
 | `reliable-task.metrics.stats-cache-ttl-ms` | `5000` | Cache TTL for task stats gauges, so one scrape does not repeatedly query task stats. |
@@ -491,7 +513,9 @@ slow tasks, failure aggregation, and timeline-related list views. Existing `/tas
 `/audit-logs` list APIs keep their compatible filtering behavior and do not receive an
 implicit 24-hour time window.
 
-Reserved compatibility properties are still bindable but are not wired to behavior in `0.7.0`: `reliable-task.serializer.type` does not switch serializers, so provide a `TaskPayloadSerializer` bean instead; `reliable-task.store.table-prefix` does not change MyBatis table names; `reliable-task.admin.port` and `reliable-task.admin.context-path` do not create a separate management server or change the current `/api/reliable-task` mapping.
+Reserved compatibility properties are still bindable but are not wired to behavior in the v1.0 line: `reliable-task.serializer.type` does not switch serializers, so provide a `TaskPayloadSerializer` bean instead; `reliable-task.store.table-prefix` does not change MyBatis table names; `reliable-task.admin.port` and `reliable-task.admin.context-path` do not create a separate management server or change the current `/api/reliable-task` mapping.
+
+Virtual-thread execution is available only on the Java 21 baseline and must be enabled explicitly with `reliable-task.executor.mode=virtual`. The default `platform` mode preserves the existing bounded thread-pool behavior. In virtual mode, `max-size` remains the backpressure and capacity limit; `core-size` and `queue-capacity` stay bindable for configuration compatibility but do not create a virtual-thread queue.
 
 For v0.6 integrations, storage extensions should depend on the narrowest Store SPI they need: `TaskCommandStore` for submit/claim/state changes, `TaskQueryStore` for read-only Admin/metrics/alert queries, and `TaskOperationsStore` for operational actions such as heartbeat and Admin writes. The old `TaskStore` remains as a compatibility facade that extends the narrower interfaces.
 
@@ -620,14 +644,14 @@ The repository keeps only `.env.example` and `application-example.yml` with plac
 No. Admin write APIs are disabled by default and must not be exposed directly to the public internet.
 Production deployments that enable `reliable-task.admin.enabled=true` should keep authorization checks enabled. If they also enable `reliable-task.admin.write-enabled=true`, the server requires auth, audit, and `X-Confirm-Operation: true` by default, and the deployment must still provide authentication, authorization, network access control, and monitoring.
 
-### Is the current preview available on Maven Central?
+### Is v1.0 available on Maven Central?
 
-Not yet. Use a source build, local Maven installation, or a private Maven repository for the preview release.
+Not until release closure confirms publication. Maven Central is the v1.0 target; before `v1.0.0` is visible there, use a source build, local Maven installation, or a private Maven repository.
 
 ### What compatibility does `0.x` provide?
 
 `0.x` is a preview stage. APIs and database schema may change before `v1.0.0`.
-Breaking changes, security fixes, and migration notes should be recorded in [CHANGELOG.md](CHANGELOG.md).
+Breaking changes, security fixes, and migration notes should be recorded in [CHANGELOG.md](CHANGELOG.md). For v1.0 preparation, see the [upgrade guide](docs/migration/v1.0-upgrade-guide.md).
 
 ## Release
 
@@ -635,11 +659,12 @@ Breaking changes, security fixes, and migration notes should be recorded in [CHA
 - Git tags use `vX.Y.Z`, for example `v0.7.0`.
 - Release notes are maintained in [CHANGELOG.md](CHANGELOG.md) and [docs/releases](docs/releases).
 - The release process is documented in [docs/release-process.md](docs/release-process.md).
-- The latest preview release is `v0.7.0`.
+- The latest completed preview release is `v0.7.0`.
+- The `v1.0.0` stable release is being prepared with Maven Central publication, release workflow, upgrade guide, test matrix, example matrix, and readiness reporting.
 
 ## Contributing
 
-Issues and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes.
+Issues and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the [community onboarding guide](docs/community-onboarding.md) before submitting changes.
 
 Pull requests should include the change scope, test results, compatibility impact, and security impact when relevant.
 

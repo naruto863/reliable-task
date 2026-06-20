@@ -1,5 +1,6 @@
 package com.reliabletask.starter.config;
 
+import com.reliabletask.executor.threadpool.ThreadPoolProperties;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -47,6 +48,7 @@ import java.util.Map;
  *     max-delay-ms: 300000
  *   # serializer.type is reserved; override TaskPayloadCodec or TaskPayloadSerializer Bean to customize payload handling.
  *   executor:
+ *     mode: platform
  *     default-core-size: 4
  *     default-max-size: 16
  *     default-queue-capacity: 100
@@ -255,6 +257,11 @@ public class ReliableTaskProperties {
      */
     @Data
     public static class Executor {
+        /**
+         * 执行器模式，默认 platform；virtual 模式使用 JDK 21 虚拟线程。
+         */
+        private ThreadPoolProperties.ExecutionMode mode = ThreadPoolProperties.ExecutionMode.PLATFORM;
+
         /**
          * 默认核心线程数，默认 4
          */

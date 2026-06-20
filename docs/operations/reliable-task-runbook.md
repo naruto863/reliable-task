@@ -3,6 +3,8 @@
 This runbook provides database-free troubleshooting paths for ReliableTask production incidents.
 Use the Admin APIs and metrics below before reaching for direct database inspection.
 
+For a scenario-to-example index across demo, console, monitoring and migration docs, see [ReliableTask v1.0 Example Matrix](../review/RELIABLE_TASK_V10_EXAMPLE_MATRIX.md).
+
 ## Before You Start
 
 - Confirm the service exposes Micrometer metrics and `reliable-task.metrics.enabled=true`.
@@ -211,4 +213,3 @@ Record:
 - Admin API queries used.
 - Manual write operations, operator identity, and trace IDs.
 - Configuration changes and follow-up tasks.
-

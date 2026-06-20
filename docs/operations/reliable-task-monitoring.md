@@ -1,7 +1,9 @@
 # ReliableTask Monitoring Guide
 
-This guide describes the production monitoring surface available in the current v0.5 scope.
+This guide describes the production monitoring surface available for the v1.0 release line.
 It only references metrics and Admin APIs that exist in the repository today.
+
+For the broader v1.0 adoption example map, see [ReliableTask v1.0 Example Matrix](../review/RELIABLE_TASK_V10_EXAMPLE_MATRIX.md).
 
 ## Scope
 
@@ -145,4 +147,3 @@ Recommended drill-down row:
 | Dead total | `sum(reliable_task_dead_total)` |
 | Success rate by task type | `sum by (task_type) (rate(reliable_task_success_total[5m]))` |
 | Failure rate by status | `sum by (status) (rate(reliable_task_failed_total[5m]))` |
-

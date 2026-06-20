@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/naruto863/reliable-task/security/advisories/new
+    about: Report exploitable vulnerabilities privately instead of opening a public issue.
+  - name: Community onboarding
+    url: https://github.com/naruto863/reliable-task/blob/main/docs/community-onboarding.md
+    about: Read this before choosing an issue or pull request path.
+  - name: Console and Admin roadmap
+    url: https://github.com/naruto863/reliable-task/blob/main/docs/console-admin-roadmap.md
+    about: Check preview scope, Admin safety boundaries and non-goals before proposing Console/Admin changes.

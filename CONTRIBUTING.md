@@ -1,6 +1,8 @@
 # Contributing Guide
 
-感谢你关注 ReliableTask。这个项目处于首次开源预览阶段，当前优先级是安全、正确性和可维护性。
+感谢你关注 ReliableTask。这个项目正从 `0.7.0` 预览基线收口到 `v1.0.0` 稳定开源版，当前优先级是安全、正确性、兼容性和可维护性。
+
+第一次参与前建议先阅读 [Community Onboarding](docs/community-onboarding.md)。Console/Admin 相关提议还应先阅读 [Console and Admin Roadmap](docs/console-admin-roadmap.md)。
 
 ## 开发环境
 
@@ -12,6 +14,14 @@
 
 ```bash
 mvn -B test
+cd reliable-task-console && npm ci && npm run typecheck && npm run test -- --run && npm run build
+```
+
+发布治理或依赖变更还应补充：
+
+```bash
+mvn -B -DskipTests org.apache.maven.plugins:maven-dependency-plugin:3.8.1:tree
+cd reliable-task-console && npm audit --audit-level=high --registry=https://registry.npmjs.org
 ```
 
 ## 分支管理
@@ -20,7 +30,7 @@ mvn -B test
 - `feat/*`：新功能分支，例如 `feat/custom-retry-policy`。
 - `fix/*`：缺陷修复分支，例如 `fix/retry-state-transition`。
 - `docs/*`：文档分支，例如 `docs/release-guide`。
-- `release/vX.Y.Z`：发布准备分支，例如 `release/v0.1.0`。
+- `release/vX.Y.Z`：发布准备分支，例如 `release/v1.0.0`。
 
 不建议长期保留大分支。小步提交、尽早发 PR 更容易审查。
 
@@ -53,7 +63,7 @@ PR 应包含：
 
 - 变更动机和问题背景。
 - 主要改动范围。
-- 测试命令和结果。
+- 测试命令和结果，并用 `PASS`、`FAIL_CODE`、`BLOCKED_ENV` 或 `NOT_RUN` 标明状态。
 - 兼容性影响。
 - 安全影响，尤其是 Admin API、配置、凭据、日志、payload 处理。
 
@@ -79,6 +89,7 @@ Feature Request 应包含：
 - 期望能力。
 - 可接受的兼容性和性能成本。
 - 是否愿意提交 PR。
+- Console/Admin 相关提议需要说明是否符合 preview、安全边界和非目标。
 
 ## 版本号规范
 
@@ -92,18 +103,18 @@ Feature Request 应包含：
 
 ## Tag 与 Release
 
-- Tag 使用 `vX.Y.Z`，例如 `v0.1.0`。
+- Tag 使用 `vX.Y.Z`，例如 `v1.0.0`。
 - 正式发布 tag 前，POM 版本必须去掉 `-SNAPSHOT`。
-- GitHub Release 内容应来自 `CHANGELOG.md`，并包含兼容性说明、升级说明和已知限制。
-- 初始阶段不使用复杂自动发布流水线。
+- GitHub Release 内容应来自 `docs/releases/vX.Y.Z.md` 和 `CHANGELOG.md`，并包含兼容性说明、升级说明和已知限制。
+- `v1.0.0` 起 Maven Central 发布必须通过 release workflow 或等价人工命令执行，并且需要用户明确授权、Central/GPG 凭证齐备、readiness report 与 release notes 一致。
 
 发布准备示例：
 
 ```bash
-mvn versions:set -DnewVersion=0.1.0
+mvn versions:set -DnewVersion=1.0.0
 mvn -B test
-git tag -a v0.1.0 -m "Release v0.1.0"
-git push origin v0.1.0
+git tag -a v1.0.0 -m "Release v1.0.0"
+git push origin v1.0.0
 ```
 
 发布后回到下一个开发版本：

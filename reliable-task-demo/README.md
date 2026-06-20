@@ -10,6 +10,8 @@ Demo 覆盖：
 - Admin API 查询任务、统计、Worker 状态。
 - Micrometer 指标查询。
 
+v1.0 场景化示例索引见 [ReliableTask v1.0 Example Matrix](../docs/v1.0/RELIABLE_TASK_V10_EXAMPLE_MATRIX.md)，可按成功、失败、重试、幂等、死信、Admin 安全、监控和迁移场景查找入口。
+
 Demo 只演示 ReliableTask 的投递、执行、重试和管理 API。它显式引入 `reliable-task-admin-spring-boot-starter` 才启用 Admin REST 自动装配；只引入 worker starter 的应用不会默认创建 Admin controller。生产环境仍必须按 at-least-once 语义设计 Handler：同一个业务动作可能因为重试、超时恢复或人工重新入队被执行多次，外部系统调用需要业务方自行保证幂等。
 
 ## 前置条件
@@ -46,7 +48,7 @@ export RELIABLE_TASK_DATASOURCE_USERNAME="reliable_task_user"
 export RELIABLE_TASK_DATASOURCE_PASSWORD="change_me"
 ```
 
-`application-example.yml` 为了本地演示显式开启 Admin：`reliable-task.admin.enabled=true`、`write-enabled=true`、`auth.enabled=false`。示例同时保持 `audit.enabled=false` 和 `batch.enabled=false`，因此 v0.7 控制台会展示只读排障视图，并禁用写操作按钮。生产默认仍是 Admin REST API 关闭、写接口关闭、权限检查开启。
+`application-example.yml` 为了本地演示显式开启 Admin：`reliable-task.admin.enabled=true`、`write-enabled=true`、`auth.enabled=false`。示例同时保持 `audit.enabled=false` 和 `batch.enabled=false`，因此控制台预览版会展示只读排障视图，并禁用写操作按钮。生产默认仍是 Admin REST API 关闭、写接口关闭、权限检查开启。
 
 ## 本地演示与生产默认差异
 
