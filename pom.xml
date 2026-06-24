@@ -59,7 +59,7 @@
 
         <spring-boot.version>3.5.14</spring-boot.version>
         <mybatis-plus.version>3.5.6</mybatis-plus.version>
-        <mysql-connector.version>8.3.0</mysql-connector.version>
+        <mysql-connector.version>9.7.0</mysql-connector.version>
         <lombok.version>1.18.46</lombok.version>
 
         <maven.source-plugin.version>3.3.1</maven.source-plugin.version>
