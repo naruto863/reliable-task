@@ -60,7 +60,11 @@ import java.util.stream.Collectors;
  *   <li>claimTask: 通过前置状态条件保证只有一个 Worker 抢占成功</li>
  *   <li>save: 先查后插 + DuplicateKeyException 兜底处理</li>
  *   <li>状态更新: 每个方法限定 WHERE 中的前置状态</li>
+ *   <li>执行结果回写: 优先使用 workerId + version + lockedAt 组成的租约 CAS</li>
  * </ul>
+ *
+ * <p>TaskStateMachine.requireTransit() 用来表达代码层允许的状态流转，
+ * 真正的并发保护仍依赖数据库 UPDATE 的 WHERE 条件，两者不能互相替代。
  */
 @Slf4j
 @Component
@@ -103,6 +107,7 @@ public class MyBatisTaskStore implements TaskStore {
     @Transactional(rollbackFor = Exception.class)
     public TaskInstance save(TaskInstance task) {
         if (task.getBizUniqueKey() != null) {
+            // 先查可以减少正常幂等命中的异常路径；唯一索引仍是并发投递下的最终裁决者。
             ReliableTaskEntity existing = findLatestByBizUniqueKey(task.getBizUniqueKey());
 
             if (existing != null) {
@@ -128,6 +133,7 @@ public class MyBatisTaskStore implements TaskStore {
             if (task.getBizUniqueKey() == null) {
                 throw e;
             }
+            // 并发窗口中其他请求可能已先插入同一幂等键；此时返回已存在任务而不是向上暴露数据库异常。
             ReliableTaskEntity existing = findLatestByBizUniqueKey(task.getBizUniqueKey());
             if (existing != null) {
                 log.info("Task already exists for bizUniqueKey={}, returning existing task id={}",
@@ -166,6 +172,7 @@ public class MyBatisTaskStore implements TaskStore {
 
     @Override
     public List<TaskInstance> fetchPendingTasks(int batchSize) {
+        // 这里只取可执行候选任务，不加锁；Worker 之间的真正竞争在 claimTask 的条件更新里完成。
         List<ReliableTaskEntity> entities = taskMapper.selectList(
                 new LambdaQueryWrapper<ReliableTaskEntity>()
                         .in(ReliableTaskEntity::getStatus,
@@ -194,6 +201,7 @@ public class MyBatisTaskStore implements TaskStore {
         LocalDateTime effectiveLockExpireAt = lockExpireAt != null
                 ? lockExpireAt
                 : now.plusMinutes(DEFAULT_LOCK_TTL_MINUTES);
+        // status + nextExecuteTime 是抢占条件，execute_count/version 在同一次 UPDATE 中递增，形成新的执行租约。
         int rows = taskMapper.update(null,
                 new LambdaUpdateWrapper<ReliableTaskEntity>()
                         .eq(ReliableTaskEntity::getId, id)
@@ -220,6 +228,7 @@ public class MyBatisTaskStore implements TaskStore {
         if (id == null || workerId == null || heartbeatTime == null || lockExpireAt == null) {
             return false;
         }
+        // 续约只按当前 workerId 命中 RUNNING 任务；若任务已被恢复或接管，本次续约自然返回 false。
         int rows = taskMapper.update(null,
                 new LambdaUpdateWrapper<ReliableTaskEntity>()
                         .eq(ReliableTaskEntity::getId, id)
@@ -259,6 +268,7 @@ public class MyBatisTaskStore implements TaskStore {
         }
         TaskStateMachine.requireTransit(TaskStatus.RUNNING, TaskStatus.SUCCESS);
         LocalDateTime now = LocalDateTime.now();
+        // 执行租约回写会同时匹配 workerId、version 和 lockedAt，避免过期 Worker 写入最终态。
         int rows = taskMapper.update(null,
                 executionLeaseWrapper(lease)
                         .set(ReliableTaskEntity::getStatus, TaskStatus.SUCCESS.getCode())
@@ -311,6 +321,7 @@ public class MyBatisTaskStore implements TaskStore {
         }
         TaskStateMachine.requireTransit(TaskStatus.RUNNING, TaskStatus.RETRYING);
         LocalDateTime now = LocalDateTime.now();
+        // 失败转重试同样要求当前 Worker 仍持有租约，否则不能安排下一次执行时间。
         int rows = taskMapper.update(null,
                 executionLeaseWrapper(lease)
                         .set(ReliableTaskEntity::getStatus, TaskStatus.RETRYING.getCode())
@@ -367,6 +378,7 @@ public class MyBatisTaskStore implements TaskStore {
         }
         TaskStateMachine.requireTransit(TaskStatus.RUNNING, TaskStatus.DEAD);
         LocalDateTime now = LocalDateTime.now();
+        // DEAD 是终态写入，必须防止已失效执行线程把新执行者的任务误判为死信。
         int rows = taskMapper.update(null,
                 executionLeaseWrapper(lease)
                         .set(ReliableTaskEntity::getStatus, TaskStatus.DEAD.getCode())
@@ -435,6 +447,7 @@ public class MyBatisTaskStore implements TaskStore {
 
     @Override
     public boolean updatePayload(Long id, String payload) {
+        // payload 只允许在未运行状态修改，避免 Handler 正在使用的输入与数据库中显示的输入不一致。
         int rows = taskMapper.update(null,
                 new LambdaUpdateWrapper<ReliableTaskEntity>()
                         .eq(ReliableTaskEntity::getId, id)
@@ -456,6 +469,7 @@ public class MyBatisTaskStore implements TaskStore {
 
     @Override
     public List<TaskInstance> findTimeoutTasks(LocalDateTime timeoutThreshold, int limit) {
+        // 恢复扫描只找锁已过期的 RUNNING 任务；锁仍有效的任务应继续归当前 Worker 管理。
         List<ReliableTaskEntity> entities = taskMapper.selectList(
                 new LambdaQueryWrapper<ReliableTaskEntity>()
                         .eq(ReliableTaskEntity::getStatus, TaskStatus.RUNNING.getCode())
@@ -473,6 +487,7 @@ public class MyBatisTaskStore implements TaskStore {
     public boolean resetTimeoutTask(Long id) {
         TaskStateMachine.requireTransit(TaskStatus.RUNNING, TaskStatus.PENDING);
         LocalDateTime now = LocalDateTime.now();
+        // ID 版本只适合兼容旧接口；真实恢复路径优先走带租约的 resetTimeoutTask(TaskExecutionLease)。
         int rows = taskMapper.update(null,
                 new LambdaUpdateWrapper<ReliableTaskEntity>()
                         .eq(ReliableTaskEntity::getId, id)
@@ -497,6 +512,7 @@ public class MyBatisTaskStore implements TaskStore {
         }
         TaskStateMachine.requireTransit(TaskStatus.RUNNING, TaskStatus.PENDING);
         LocalDateTime now = LocalDateTime.now();
+        // 同时匹配原 lockExpireAt 和租约身份，避免扫描后 Worker 已续约时仍被误重置为 PENDING。
         int rows = taskMapper.update(null,
                 executionLeaseWrapper(lease)
                         .eq(ReliableTaskEntity::getLockExpireAt, lease.getLockExpireAt())
@@ -887,6 +903,7 @@ public class MyBatisTaskStore implements TaskStore {
                                           LocalDateTime createTimeStart,
                                           LocalDateTime createTimeEnd,
                                           int limit) {
+        // 批量操作先稳定选出 ID 集合，再逐个执行状态更新；这样预览、审计和部分失败统计可以复用同一口径。
         LambdaQueryWrapper<ReliableTaskEntity> wrapper = new LambdaQueryWrapper<ReliableTaskEntity>()
                 .select(ReliableTaskEntity::getId)
                 .orderByAsc(ReliableTaskEntity::getId)
@@ -927,6 +944,7 @@ public class MyBatisTaskStore implements TaskStore {
     }
 
     private LambdaUpdateWrapper<ReliableTaskEntity> executionLeaseWrapper(TaskExecutionLease lease) {
+        // 这是执行结果回写的核心 CAS 条件：同一任务 ID 还必须仍处于 RUNNING、归属同一 Worker 且版本未变化。
         return new LambdaUpdateWrapper<ReliableTaskEntity>()
                 .eq(ReliableTaskEntity::getId, lease.getTaskId())
                 .eq(ReliableTaskEntity::getStatus, TaskStatus.RUNNING.getCode())

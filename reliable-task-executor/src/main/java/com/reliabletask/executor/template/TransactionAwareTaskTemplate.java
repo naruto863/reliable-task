@@ -44,6 +44,9 @@ import java.util.Map;
  *   业务调用 submit() → 构建 TaskInstance(status=PENDING)
  *   → TaskCommandStore.save() → PENDING 状态入库
  * </pre>
+ *
+ * <p>这里同时承担投递侧的幂等决策、payload 编码和 traceId 生成。它们都放在入库前完成，
+ * 是为了让存储层只关心任务记录本身，避免不同存储实现重复理解业务请求对象。
  */
 @Slf4j
 public class TransactionAwareTaskTemplate implements TaskTemplate {
@@ -199,6 +202,9 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
      *
      * <p>构建 TaskInstance 并调用 TaskCommandStore.save() 持久化。
      * TaskCommandStore.save() 内部已处理 bizUniqueKey 幂等。
+     *
+     * <p>幂等策略先基于当前库内最新任务做一次业务决策，然后存储层再用唯一键/重复键兜底。
+     * 这两层保护分别覆盖“可配置业务策略”和“并发投递竞态”，不要只保留其中一层。
      */
     private TaskSubmitResult doSubmit(TaskSubmitRequest request, LocalDateTime executeTime, Object payloadOverride) {
         String traceId = resolveTraceId(request);
@@ -239,6 +245,7 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
             throw new IllegalStateException("Task submit rejected by idempotency strategy: " + decision.getReason());
         }
 
+        // 策略可以改写最终入库幂等键，例如允许终态后重新投递时生成新的 bizUniqueKey。
         String effectiveBizUniqueKey = decision.getBizUniqueKey() != null
                 ? decision.getBizUniqueKey()
                 : baseBizUniqueKey;
@@ -336,6 +343,12 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
         }
     }
 
+    /**
+     * 统一完成投递 payload 入库编码。
+     *
+     * <p>优先级为显式 payloadOverride、request.payloadObject、request.payload。这样旧版字符串 payload
+     * 和新版对象 payload 可以共存，同时给 TaskPayloadCodec 足够上下文做加密、压缩或类型化 JSON 等扩展。
+     */
     private String serializePayload(TaskSubmitRequest request, Object payloadOverride, String traceId) {
         Object payload = payloadOverride != null
                 ? payloadOverride
@@ -357,6 +370,11 @@ public class TransactionAwareTaskTemplate implements TaskTemplate {
         return serializedPayload;
     }
 
+    /**
+     * 生成并约束 traceId。
+     *
+     * <p>自定义生成器返回空值时回退默认实现，避免投递链路因为观测扩展实现不严谨而丢失 traceId。
+     */
     private String resolveTraceId(TaskSubmitRequest request) {
         String traceId = traceIdGenerator.generate(request);
         if (traceId == null || traceId.isBlank()) {

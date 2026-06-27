@@ -31,7 +31,8 @@ import java.util.List;
  * <p>并发安全:
  * <ul>
  *   <li>fetchPendingTasks 返回的任务可能被多个 Worker 同时获取</li>
- *   <li>claimTask 通过 WHERE status = PENDING 状态锁保证只有一个 Worker 抢占成功</li>
+ *   <li>claimTask 通过 WHERE status IN (PENDING, RETRYING) 条件更新保证只有一个 Worker 抢占成功</li>
+ *   <li>抢占成功后重新读取任务，是为了拿到本次执行写入的 workerId、lockedAt、lockExpireAt 和 version</li>
  * </ul>
  */
 @Slf4j
@@ -82,6 +83,7 @@ public class WorkerScheduler {
             return;
         }
 
+        // 拉取只是候选集快照，不代表任务已经归属当前 Worker；真正的并发裁决发生在 claimTask 条件更新里。
         List<TaskInstance> tasks = taskCommandStore.fetchPendingTasks(fetchSize);
         if (tasks == null || tasks.isEmpty()) {
             return;
@@ -101,6 +103,7 @@ public class WorkerScheduler {
                     log.info("Worker {} claimed task: id={}, type={}, bizId={}",
                             workerId, task.getId(), task.getTaskType(), task.getBizId());
 
+                    // 执行器需要最新租约信息做成功/失败回写 CAS，不能继续使用 fetch 阶段的旧快照。
                     TaskInstance claimedTask = taskCommandStore.getById(task.getId());
                     if (claimedTask == null) {
                         log.warn("Worker {} claimed task but failed to load latest lease: id={}",
@@ -132,6 +135,7 @@ public class WorkerScheduler {
         int availableCapacity = taskExecutor.getAvailableCapacity();
         int runningTaskCount = Math.max(maxCapacity - availableCapacity, 0);
 
+        // 旧的自定义存储实现可能只实现 TaskCommandStore；此时执行不受影响，只跳过运维心跳能力。
         if (taskOperationsStore == null) {
             log.debug("Worker heartbeat skipped because TaskOperationsStore is not configured");
             return;
@@ -158,6 +162,7 @@ public class WorkerScheduler {
             return batchSize;
         }
 
+        // 背压用执行器剩余容量裁剪本轮拉取量，避免数据库一次放出远多于本机可执行的任务。
         int maxFetchSize = properties.getBackpressureMaxFetchSize() > 0
                 ? properties.getBackpressureMaxFetchSize()
                 : batchSize;
@@ -185,6 +190,7 @@ public class WorkerScheduler {
     }
 
     private void publishStarted(TaskInstance fetchedTask, TaskInstance claimedTask) {
+        // STARTED 事件保留抢占前后状态，便于审计“候选任务被当前 Worker 接管”这一瞬间。
         TaskStatus statusBefore = fetchedTask == null ? null : fetchedTask.getStatus();
         eventPublisher.publish(TaskEvent.of(TaskEventType.STARTED, claimedTask,
                 statusBefore, TaskStatus.RUNNING, "task claimed"));

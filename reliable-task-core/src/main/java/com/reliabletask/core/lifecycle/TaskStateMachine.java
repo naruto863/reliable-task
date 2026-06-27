@@ -17,6 +17,10 @@ public final class TaskStateMachine {
     private static final Map<TaskStatus, Set<TaskStatus>> TRANSITIONS = new EnumMap<>(TaskStatus.class);
 
     static {
+        /*
+         * 这里只声明“业务上允许”的状态边，不负责并发裁决。
+         * 实际更新仍必须在存储层用 WHERE status / lease / version 等条件保证原子性。
+         */
         TRANSITIONS.put(TaskStatus.PENDING, EnumSet.of(TaskStatus.RUNNING, TaskStatus.CANCELLED));
         TRANSITIONS.put(TaskStatus.RETRYING, EnumSet.of(TaskStatus.RUNNING, TaskStatus.DEAD, TaskStatus.CANCELLED));
         TRANSITIONS.put(TaskStatus.RUNNING, EnumSet.of(
