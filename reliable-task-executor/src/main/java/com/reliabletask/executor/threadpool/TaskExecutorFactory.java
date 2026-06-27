@@ -110,6 +110,7 @@ public class TaskExecutorFactory {
         ThreadPoolProperties.ExecutionMode mode =
                 properties.getMode() != null ? properties.getMode() : ThreadPoolProperties.ExecutionMode.PLATFORM;
         if (mode == ThreadPoolProperties.ExecutionMode.VIRTUAL) {
+            // 虚拟线程模式不使用队列容量，但仍保留 maxSize 作为业务并发上限。
             return createVirtualPool(name, maxSize);
         }
         return createPlatformPool(name, coreSize, maxSize, queueCapacity);
@@ -125,6 +126,7 @@ public class TaskExecutorFactory {
                 new TaskThreadFactory(name),
                 new ThreadPoolExecutor.CallerRunsPolicy()
         );
+        // CallerRunsPolicy 让 Worker 调度线程在饱和时自己执行任务，形成自然背压而不是直接丢任务。
         pool.allowCoreThreadTimeOut(true);
         log.info("Created thread pool: name={}, coreSize={}, maxSize={}, queueCapacity={}",
                 name, coreSize, maxSize, queueCapacity);
@@ -191,6 +193,7 @@ public class TaskExecutorFactory {
 
         @Override
         public int availableCapacity() {
+            // 背压估算同时看队列余量和可新增执行线程；这是 Worker 本轮最多应继续拉取的任务量。
             int remainingQueueCapacity = executor.getQueue().remainingCapacity();
             int remainingThreadCapacity = executor.getMaximumPoolSize() - executor.getActiveCount();
             return remainingQueueCapacity + Math.max(remainingThreadCapacity, 0);
@@ -198,6 +201,7 @@ public class TaskExecutorFactory {
 
         @Override
         public int maxCapacity() {
+            // 最大容量用于心跳展示，包含正在运行、排队中和仍可接收的任务槽位。
             return executor.getMaximumPoolSize() + executor.getQueue().remainingCapacity() + executor.getQueue().size();
         }
     }
@@ -212,6 +216,7 @@ public class TaskExecutorFactory {
                 throw new IllegalArgumentException("Virtual executor maxSize must be positive");
             }
             this.maxConcurrency = maxConcurrency;
+            // JDK 虚拟线程本身几乎不限制数量，这里用 Semaphore 显式恢复“线程池最大并发”的业务语义。
             this.permits = new Semaphore(maxConcurrency);
             ThreadFactory threadFactory = Thread.ofVirtual()
                     .name("reliable-task-" + name + "-virtual-", 0)
@@ -263,6 +268,7 @@ public class TaskExecutorFactory {
         public void execute(Runnable command) {
             boolean acquired = false;
             try {
+                // acquire 会阻塞提交方，从而把虚拟线程模式也纳入 Worker 背压闭环。
                 permits.acquire();
                 acquired = true;
                 delegate.execute(() -> {

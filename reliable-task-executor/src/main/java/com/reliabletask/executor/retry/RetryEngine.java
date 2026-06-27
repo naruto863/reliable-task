@@ -191,6 +191,7 @@ public class RetryEngine {
         FailureDecision failureDecision = classifyFailure(task, rootCause);
         boolean retriesExhausted = task.getActualRetryCount() >= config.getMaxRetryCount();
 
+        // 是否进入 DEAD 由两类规则共同决定：业务分类器可以提前判死，重试计数则兜底防止无限重试。
         if (failureDecision.getAction() == FailureDecision.Action.DEAD || retriesExhausted) {
             markDead(task, rootCause, durationMs, statusBefore, retriesExhausted, failureDecision);
         } else {
@@ -214,6 +215,7 @@ public class RetryEngine {
         if (!markDead(task, errorCode, truncate(errorMessage, 2000))) {
             log.warn("Skip DEAD log because lease CAS failed: id={}, workerId={}, version={}, errorCode={}",
                     task.getId(), task.getWorkerId(), task.getVersion(), errorCode);
+            // 旧租约已经失效时不能再写 DEAD 日志、指标或死信，否则会污染新执行者的状态判断。
             return;
         }
         taskStore.saveLog(task.getId(), task.getExecuteCount(),
@@ -259,6 +261,7 @@ public class RetryEngine {
         if (!markWaitRetry(task, errorCode, truncate(errorMessage, 2000), nextExecuteTime)) {
             log.warn("Skip RETRYING log because lease CAS failed: id={}, workerId={}, version={}, errorCode={}",
                     task.getId(), task.getWorkerId(), task.getVersion(), errorCode);
+            // CAS 失败说明任务已被恢复或接管，本次失败不再拥有调度下一次重试的资格。
             return;
         }
         taskStore.saveLog(task.getId(), task.getExecuteCount(),
@@ -324,6 +327,7 @@ public class RetryEngine {
     }
 
     private long clampDelay(long delayMs, RetryStrategyResolver.ResolvedRetryConfig config) {
+        // 策略返回值仍要经过全局 min/max 裁剪，避免自定义策略导致过密重试或超长沉默。
         long normalizedDelay = Math.max(0L, delayMs);
         normalizedDelay = Math.max(normalizedDelay, config.getMinDelayMs());
         return Math.min(normalizedDelay, config.getMaxDelayMs());
@@ -340,6 +344,7 @@ public class RetryEngine {
             log.warn("FailureClassifier threw exception, fallback to default: taskId={}, reason={}",
                     task.getId(), e.getMessage());
         }
+        // 分类器是扩展点，不能让扩展实现异常反过来中断失败处理；默认分类器保证任务仍能收敛。
         return defaultFailureClassifier.classify(task, rootCause);
     }
 
@@ -444,6 +449,7 @@ public class RetryEngine {
 
     private void dispatchDeadLetter(TaskInstance task, String errorCode, String errorMessage,
                                     String reason, boolean retriesExhausted) {
+        // 死信分发发生在状态已成功写入 DEAD 之后，保证外部处理器看到的是最终态任务。
         deadLetterDispatcher.dispatch(DeadLetterContext.builder()
                 .task(task)
                 .errorCode(errorCode)

@@ -27,6 +27,7 @@ import java.util.List;
  * <p>状态流转: RUNNING (timeout) → PENDING
  *
  * <p>补偿扫描是防丢失的最后一道防线，确保任务最终能被重新消费。
+ * 重置时携带 TaskExecutionLease，避免把已经被 Worker 续约或重新抢占的任务误恢复。
  */
 @Slf4j
 public class TaskRecoveryScheduler {
@@ -64,6 +65,7 @@ public class TaskRecoveryScheduler {
             return;
         }
 
+        // lockExpireAt 小于当前时间才算孤儿任务；租约仍有效的 RUNNING 任务必须留给当前 Worker 完成。
         LocalDateTime timeoutThreshold = LocalDateTime.now();
         List<TaskInstance> timeoutTasks = taskStore.findTimeoutTasks(timeoutThreshold, maxResetPerScan);
 
@@ -81,6 +83,7 @@ public class TaskRecoveryScheduler {
                 break;
             }
 
+            // 以扫描时看到的租约做 CAS，防止扫描与 Worker 续约、成功回写、其他恢复线程之间互相覆盖。
             boolean success = taskStore.resetTimeoutTask(TaskExecutionLease.from(task));
             if (success) {
                 resetCount++;

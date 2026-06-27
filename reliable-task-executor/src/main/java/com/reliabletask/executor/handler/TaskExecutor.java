@@ -54,6 +54,9 @@ import java.util.concurrent.*;
  *   <li>RUNNING → RETRYING: 可重试异常且未超过最大重试次数（由 RetryEngine 处理）</li>
  *   <li>RUNNING → DEAD: 不可重试异常或超过最大重试次数（由 RetryEngine 处理）</li>
  * </ul>
+ *
+ * <p>执行器只处理已经被 Worker 抢占并处于 RUNNING 的任务。成功、失败、死信等回写都优先携带
+ * TaskExecutionLease 做 CAS，防止超时恢复或其他 Worker 接管后，旧执行线程覆盖新状态。
  */
 @Slf4j
 public class TaskExecutor {
@@ -343,6 +346,7 @@ public class TaskExecutor {
             } catch (IllegalArgumentException e) {
                 interceptorChain.onError(context, e);
                 log.error("No handler found for task: id={}, type={}", task.getId(), task.getTaskType());
+                // 没有 Handler 不是可恢复的运行时抖动，直接进入 DEAD，并通过租约 CAS 避免覆盖已被恢复的任务。
                 if (!markDead(task, "NO_HANDLER", e.getMessage())) {
                     log.warn("Skip no-handler DEAD log because lease CAS failed: id={}, workerId={}, version={}",
                             task.getId(), task.getWorkerId(), task.getVersion());
@@ -369,6 +373,7 @@ public class TaskExecutor {
                 Future<?> future;
                 try {
                     ExecutorService executor = executorFactory.getExecutor(task.getTaskType());
+                    // 真正的业务 Handler 在线程池中执行；外层调度线程保留 timeout、租约续约和最终状态回写职责。
                     future = executor.submit(() -> {
                         TaskExecutionContext workerContext = TaskExecutionContext.from(task);
                         interceptorChain.beforeExecute(workerContext);
@@ -398,10 +403,12 @@ public class TaskExecutor {
                 } catch (RuntimeException e) {
                     long durationMs = System.currentTimeMillis() - startTime;
                     interceptorChain.onError(context, e);
+                    // 线程池拒绝、序列化前置错误等尚未进入 Handler 的异常，也统一走 RetryEngine 决策。
                     retryEngine.handleFailure(handler, task, e, durationMs, statusBefore.name());
                     return;
                 }
 
+                // 长任务执行期间周期性续约，避免恢复扫描把仍在执行的任务误判为孤儿任务。
                 ScheduledFuture<?> leaseRenewal = startLeaseRenewal(task);
                 try {
                     future.get(timeoutMs, TimeUnit.MILLISECONDS);
@@ -418,6 +425,7 @@ public class TaskExecutor {
                 if (!markSuccess(task)) {
                     log.warn("Skip success log because lease CAS failed: id={}, workerId={}, version={}",
                             task.getId(), task.getWorkerId(), task.getVersion());
+                    // CAS 失败说明任务租约已经变化，后续日志/指标不能再代表当前任务最终状态。
                     return;
                 }
                 taskStore.saveLog(task.getId(), task.getExecuteCount(),
@@ -464,6 +472,7 @@ public class TaskExecutor {
     private Object deserializePayload(TaskHandler taskHandler, TaskInstance task) {
         Class<?> payloadType = taskHandler.payloadType();
         if (payloadType == null || payloadType == String.class) {
+            // String 是历史兼容路径，不做 JSON decode，避免旧 Handler 收到被二次转换的 payload。
             return task.getPayload();
         }
         TaskPayloadCodecContext context = TaskPayloadCodecContext.builder()
@@ -503,6 +512,7 @@ public class TaskExecutor {
         if (maxConcurrency <= 0) {
             return null;
         }
+        // 限流粒度按 taskType 共享，保证同类任务的 Handler 级并发上限不会被多线程提交绕过。
         return concurrencyLimiters.computeIfAbsent(taskHandler.getTaskType(),
                 ignored -> new Semaphore(maxConcurrency));
     }
@@ -516,6 +526,7 @@ public class TaskExecutor {
         }
 
         long intervalMs = Math.max(workerProperties.getHeartbeatIntervalMs(), 1000L);
+        // 先同步续约一次，再进入周期调度，减少刚开始执行就接近锁过期的窗口。
         renewLease(task);
         return leaseRenewalExecutor.scheduleAtFixedRate(
                 () -> renewLease(task), intervalMs, intervalMs, TimeUnit.MILLISECONDS);
@@ -525,6 +536,7 @@ public class TaskExecutor {
         TaskExecutionLease lease = TaskExecutionLease.from(task);
         boolean updated = taskStore.markSuccess(lease);
         if (!updated && !hasExecutionLeaseIdentity(lease)) {
+            // 兼容旧存储实现或旧测试构造的无租约任务；真实 Worker 执行路径应优先走租约 CAS。
             return taskStore.markSuccess(task.getId());
         }
         return updated;
@@ -534,6 +546,7 @@ public class TaskExecutor {
         TaskExecutionLease lease = TaskExecutionLease.from(task);
         boolean updated = taskStore.markDead(lease, errorCode, errorMessage);
         if (!updated && !hasExecutionLeaseIdentity(lease)) {
+            // 仅在任务快照没有完整租约身份时回退 ID 更新，避免把 CAS 失败误当成旧实现兼容场景。
             return taskStore.markDead(task.getId(), errorCode, errorMessage);
         }
         return updated;
@@ -553,6 +566,7 @@ public class TaskExecutor {
             taskStore.renewTaskLease(task.getId(), task.getWorkerId(), now,
                     now.plusSeconds(workerProperties.getLockRenewalTtlSeconds()));
         } catch (RuntimeException e) {
+            // 续约失败不立即中断 Handler；最终状态回写仍会通过租约 CAS 判断当前 Worker 是否仍拥有任务。
             log.warn("Failed to renew task lease: id={}, workerId={}, reason={}",
                     task.getId(), task.getWorkerId(), e.getMessage());
         }

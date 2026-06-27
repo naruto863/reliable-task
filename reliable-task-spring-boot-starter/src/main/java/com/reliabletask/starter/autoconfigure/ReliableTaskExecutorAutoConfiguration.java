@@ -79,6 +79,9 @@ import java.util.List;
  *
  * <p>注册 Worker、线程池、重试引擎、任务模板等执行相关 Bean。
  * 通过 reliable-task.enabled 控制总开关。
+ *
+ * <p>所有核心扩展点都优先尊重用户自定义 Bean，再提供框架默认实现或 Noop fallback。
+ * 这样 starter 可以开箱即用，也允许生产接入方逐步替换指标、审计、告警、序列化和幂等策略。
  */
 @AutoConfiguration(after = {ReliableTaskAutoConfiguration.class, ReliableTaskStoreAutoConfiguration.class})
 @ConditionalOnProperty(prefix = "reliable-task", name = "enabled", havingValue = "true", matchIfMissing = true)
@@ -116,6 +119,7 @@ public class ReliableTaskExecutorAutoConfiguration {
                                            WorkerProperties workerProperties,
                                            TaskExecutor taskExecutor,
                                            TaskEventPublisher eventPublisher) {
+        // Worker 依赖命令存储执行抢占，同时依赖运维存储上报心跳；两者拆开便于自定义存储按能力渐进实现。
         return new WorkerScheduler(taskCommandStore, taskOperationsStore, workerProperties,
                 taskExecutor, eventPublisher);
     }
@@ -139,6 +143,7 @@ public class ReliableTaskExecutorAutoConfiguration {
     @ConditionalOnProperty(prefix = "reliable-task.recovery", name = "enabled", havingValue = "true", matchIfMissing = true)
     public TaskRecoveryScheduler taskRecoveryScheduler(TaskCommandStore taskStore, RecoveryProperties recoveryProperties,
                                                        TaskEventPublisher eventPublisher) {
+        // 恢复扫描默认开启，用于兜底处理 Worker 崩溃留下的过期 RUNNING 任务。
         return new TaskRecoveryScheduler(taskStore, recoveryProperties, eventPublisher);
     }
 
@@ -189,6 +194,7 @@ public class ReliableTaskExecutorAutoConfiguration {
     @ConditionalOnMissingBean(RetryStrategyRegistry.class)
     public RetryStrategyRegistry retryStrategyRegistry(RetryProperties retryProperties,
                                                        List<RetryStrategy> retryStrategies) {
+        // 固定/指数退避是内置基础策略，用户注入的 RetryStrategy 会进入同一个 Registry 供注解或配置选择。
         return new RetryStrategyRegistry(
                 new FixedRetryStrategy(),
                 new ExponentialRetryStrategy(
@@ -228,18 +234,21 @@ public class ReliableTaskExecutorAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(TaskDeadLetterHandler.class)
     public TaskDeadLetterHandler taskDeadLetterHandler() {
+        // 默认死信处理器不做外部副作用，生产环境可替换为 MQ、工单、告警或补偿系统接入。
         return new NoopTaskDeadLetterHandler();
     }
 
     @Bean
     @ConditionalOnMissingBean(TaskDeadLetterDispatcher.class)
     public TaskDeadLetterDispatcher taskDeadLetterDispatcher(List<TaskDeadLetterHandler> handlers) {
+        // Dispatcher 统一隔离多个死信处理器的异常，避免一个扩展失败影响其他扩展。
         return new TaskDeadLetterDispatcher(handlers);
     }
 
     @Bean
     @ConditionalOnMissingBean(TaskEventPublisher.class)
     public TaskEventPublisher taskEventPublisher(List<TaskEventListener> listeners) {
+        // 事件发布器是进程内扩展点，不绑定具体消息中间件；需要外发时由 listener 自行实现。
         return new TaskEventPublisher(listeners);
     }
 
@@ -268,12 +277,14 @@ public class ReliableTaskExecutorAutoConfiguration {
     @ConditionalOnMissingBean(TaskAlertService.class)
     @ConditionalOnProperty(prefix = "reliable-task.alert", name = "enabled", havingValue = "true")
     public TaskAlertService taskAlertService(AlarmNotifier alarmNotifier, AlertProperties alertProperties) {
+        // 告警开关打开时使用真实阈值计算服务，通知通道仍由 AlarmNotifier 扩展。
         return new DefaultTaskAlertService(alarmNotifier, alertProperties);
     }
 
     @Bean
     @ConditionalOnMissingBean(TaskAlertService.class)
     public TaskAlertService noopTaskAlertService() {
+        // 未启用告警时提供 Noop 服务，执行链路无需到处判断 alert 是否存在。
         return new NoopTaskAlertService();
     }
 
@@ -297,6 +308,7 @@ public class ReliableTaskExecutorAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(TaskPayloadCodec.class)
     public TaskPayloadCodec taskPayloadCodec(TaskPayloadSerializer payloadSerializer) {
+        // 通过 adapter 保持旧 TaskPayloadSerializer 扩展兼容，同时让新代码统一依赖上下文感知的 TaskPayloadCodec。
         return TaskPayloadCodecAdapters.fromSerializer(payloadSerializer);
     }
 
@@ -323,6 +335,7 @@ public class ReliableTaskExecutorAutoConfiguration {
     public TaskInterceptorChain taskInterceptorChain(List<TaskInterceptor> taskInterceptors) {
         List<TaskInterceptor> orderedInterceptors = new ArrayList<>(taskInterceptors);
         AnnotationAwareOrderComparator.sort(orderedInterceptors);
+        // 按 Spring Order 排序后再固化链路，保证 trace、审计、业务拦截器的执行顺序可预测。
         return TaskInterceptorChain.of(orderedInterceptors);
     }
 
@@ -351,12 +364,14 @@ public class ReliableTaskExecutorAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(TaskMetricsRecorder.class)
     public TaskMetricsRecorder taskMetricsRecorder() {
+        // 没有 Micrometer 或未启用 metrics 时降级为 Noop，避免指标能力成为启动前置条件。
         return new NoopTaskMetricsRecorder();
     }
 
     @Bean
     @ConditionalOnMissingBean(TaskAuditRecorder.class)
     public TaskAuditRecorder taskAuditRecorder() {
+        // 系统执行侧审计默认不落库；Admin 人工操作审计由 admin 模块单独控制。
         return new NoopTaskAuditRecorder();
     }
 
@@ -419,6 +434,7 @@ public class ReliableTaskExecutorAutoConfiguration {
                                      TaskMetricsRecorder metricsRecorder,
                                      TaskEventPublisher eventPublisher,
                                      TaskTraceIdGenerator traceIdGenerator) {
+        // TaskTemplate 是业务投递入口，聚合幂等策略、payload codec、指标和事件，保持业务代码只依赖一个门面。
         return new TransactionAwareTaskTemplate(taskStore, idempotencyStrategies,
                 properties.getIdempotency().getStrategy(), payloadCodec, metricsRecorder, eventPublisher,
                 traceIdGenerator);
