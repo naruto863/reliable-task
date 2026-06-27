@@ -655,3 +655,9 @@ git push origin v0.7.0
 ## License
 
 ReliableTask 使用 [Apache License 2.0](LICENSE) 发布。
+
+## 维护说明
+
+这个项目主要利用业余时间维护，个人精力确实有限，文档和代码如有疏漏还请包涵。
+
+如果你觉得它还不错，或者刚好解决了你的问题，欢迎点个 Star、帮忙转发一下。感谢支持。

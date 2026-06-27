@@ -671,3 +671,9 @@ Pull requests should include the change scope, test results, compatibility impac
 ## License
 
 ReliableTask is licensed under the [Apache License 2.0](LICENSE).
+
+## A Note from the Maintainer
+
+ReliableTask is maintained mostly in my spare time, and my personal bandwidth is limited. If the documentation or code has gaps, thank you for your understanding.
+
+If this project looks useful to you, or if it happens to solve a problem you ran into, a Star or a share would mean a lot. Thanks for the support.
