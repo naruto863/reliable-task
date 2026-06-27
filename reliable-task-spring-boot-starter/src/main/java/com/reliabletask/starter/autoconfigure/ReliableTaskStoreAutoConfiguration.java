@@ -20,6 +20,9 @@ import org.springframework.context.annotation.Bean;
  *
  * <p>注册 MyBatisTaskStore 和 MyBatis-Plus 相关 Bean。
  * 通过 reliable-task.enabled 和 reliable-task.store 控制开关。
+ *
+ * <p>如果业务方提供了自己的 TaskStore Bean，本配置不会再创建 MyBatisTaskStore。
+ * 这样可以在不引入默认表结构的情况下接入自研存储，但自定义实现需要同时关注命令、查询和运维能力边界。
  */
 @AutoConfiguration(after = ReliableTaskAutoConfiguration.class)
 @ConditionalOnProperty(prefix = "reliable-task", name = "enabled", havingValue = "true", matchIfMissing = true)
@@ -34,6 +37,7 @@ public class ReliableTaskStoreAutoConfiguration {
                                ReliableTaskWorkerMapper workerMapper,
                                ReliableTaskAuditLogMapper auditLogMapper,
                                ReliableTaskBatchOperationMapper batchOperationMapper) {
+        // 默认实现一次性注入 V2 运维相关 Mapper；低版本兼容构造器仍保留在 MyBatisTaskStore 内部。
         return new MyBatisTaskStore(taskMapper, taskLogMapper,
                 workerMapper, auditLogMapper, batchOperationMapper);
     }
@@ -41,6 +45,7 @@ public class ReliableTaskStoreAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(MyBatisPlusMetaObjectHandler.class)
     public MyBatisPlusMetaObjectHandler myBatisPlusMetaObjectHandler() {
+        // 统一补 createTime/updateTime，避免各个写入入口重复维护时间字段。
         return new MyBatisPlusMetaObjectHandler();
     }
 }

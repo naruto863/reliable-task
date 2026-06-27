@@ -34,6 +34,9 @@ import java.util.Map;
  * }
  * </pre>
  * Handler 必须先通过 @Component 或 @Bean 成为 Spring Bean。
+ *
+ * <p>这里通过 {@link AopUtils#getTargetClass(Object)} 获取代理背后的真实类型，
+ * 否则带有事务、切面或代理增强的 Handler 可能读不到类上的注解。
  */
 @Slf4j
 public class TaskHandlerAutoRegistrar implements ApplicationListener<ContextRefreshedEvent> {
@@ -68,6 +71,7 @@ public class TaskHandlerAutoRegistrar implements ApplicationListener<ContextRefr
 
             Class<?> handlerClass = AopUtils.getTargetClass(handler);
             TaskHandler annotation = AnnotationUtils.findAnnotation(handlerClass, TaskHandler.class);
+            // 名称解析集中委托给 TaskNameResolver，便于未来支持自定义命名规范或兼容迁移策略。
             String taskType = taskNameResolver.resolve(handler, handlerClass, annotation);
             try {
                 registry.registerHandler(taskType, handler, handlerClass, null);

@@ -24,6 +24,10 @@ import java.util.stream.Collectors;
  *
  * <p>职责单一：只负责对象之间的字段映射，不掺杂任何业务逻辑。
  * 所有方法均为静态工具方法，无状态。
+ *
+ * <p>这里集中处理数据库表示和领域表示的差异，例如状态码、重试策略字符串、
+ * Worker 状态码以及 dryRun 标志位。状态是否允许流转、租约是否有效等规则仍由
+ * TaskStateMachine 和 TaskStore 方法负责，不能下沉到转换器。
  */
 public class ReliableTaskConverter {
 
@@ -43,6 +47,7 @@ public class ReliableTaskConverter {
             return null;
         }
 
+        // 实体字段与任务表列基本一一对应；枚举在这里转为数据库稳定存储格式。
         ReliableTaskEntity entity = new ReliableTaskEntity();
         entity.setId(task.getId());
         entity.setTaskType(task.getTaskType());
@@ -85,6 +90,7 @@ public class ReliableTaskConverter {
             return null;
         }
 
+        // 数据库中的状态码和策略名称在进入执行链路前恢复为强类型枚举，减少下游魔法值判断。
         return TaskInstance.builder()
                 .id(entity.getId())
                 .taskType(entity.getTaskType())
@@ -240,6 +246,7 @@ public class ReliableTaskConverter {
         if (heartbeat == null) {
             return null;
         }
+        // 心跳模型面向运行时，实体模型面向表结构；状态文本在入库前压缩成数字码便于查询。
         ReliableTaskWorkerEntity entity = new ReliableTaskWorkerEntity();
         entity.setWorkerId(heartbeat.getWorkerId());
         entity.setAppName(heartbeat.getAppName());
@@ -353,6 +360,7 @@ public class ReliableTaskConverter {
     }
 
     private static Integer toWorkerStatusCode(String status) {
+        // 未知状态默认按 ONLINE 处理，保证老版本只上报非空心跳时仍能被视为可用节点。
         if ("OFFLINE".equalsIgnoreCase(status)) {
             return 0;
         }

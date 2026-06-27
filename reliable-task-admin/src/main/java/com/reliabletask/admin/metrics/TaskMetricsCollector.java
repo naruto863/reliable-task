@@ -27,6 +27,9 @@ import java.util.Map;
  *
  * <p>所有统计均为实时查询，不依赖缓存。
  * MVP 方案，数据量大时建议引入定时汇总或缓存。
+ *
+ * <p>该收集器服务 Admin 页面和轻量监控，不参与调度决策。调度链路只依赖 TaskStore
+ * 查询可执行任务和租约 CAS，避免管理端统计压力影响任务执行正确性。
  */
 @Slf4j
 @Component
@@ -43,7 +46,7 @@ public class TaskMetricsCollector {
     public TaskStatsVO collectStats() {
         TaskStatsVO stats = new TaskStatsVO();
 
-        // 1. 各状态任务数量
+        // 1. 各状态任务数量。Mapper 返回字段名会受数据库方言影响，后续解析会兼容 count/COUNT(*)。
         Map<Integer, Long> statusCount = parseStatusCount(taskMapper.countByStatus());
 
         stats.setStatusCount(statusCount);
@@ -52,7 +55,7 @@ public class TaskMetricsCollector {
                 + statusCount.getOrDefault(TaskStatus.RETRYING.getCode(), 0L));
         stats.setDeadTasks(statusCount.getOrDefault(TaskStatus.DEAD.getCode(), 0L));
 
-        // 2. 今日统计
+        // 2. 今日统计。这里按应用本地时区计算“今天”，不是跨时区报表口径。
         LocalDateTime todayStart = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0).withNano(0);
 
         Long todayNew = taskMapper.selectCount(
@@ -75,7 +78,7 @@ public class TaskMetricsCollector {
         );
         stats.setTodayFailedTasks(todayFailed);
 
-        // 3. 按 taskType 分组统计
+        // 3. 积压年龄和 taskType 分组统计，供 Admin 快速定位哪类任务堆积。
         stats.setOldestPendingAgeSeconds(resolveOldestPendingAgeSeconds());
         stats.setTaskTypeStats(parseTaskTypeCount(taskMapper.countByTaskType()));
 

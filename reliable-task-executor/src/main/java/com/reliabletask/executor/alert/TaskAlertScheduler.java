@@ -7,6 +7,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 
 /**
  * 周期性告警扫描器。
+ *
+ * <p>该扫描器只负责 pending/backlog 这类需要全局统计的告警；
+ * 单任务死信和执行失败率由执行链路即时触发，避免把所有告警都堆到同一个定时任务里。
  */
 @Slf4j
 public class TaskAlertScheduler {
@@ -27,6 +30,7 @@ public class TaskAlertScheduler {
             return;
         }
         try {
+            // 使用 TaskQueryStore 的读模型统计，避免扫描器感知具体存储实现或 SQL 细节。
             TaskStatsVO stats = taskStore.getStats();
             long pendingTasks = stats == null ? 0L : stats.getPendingTasks();
             if (pendingTasks > properties.getPendingThreshold()) {

@@ -8,6 +8,9 @@ import java.util.Objects;
  * Admin 运维查询参数保护器。
  *
  * <p>仅用于 v0.5 新增的运维查询接口，不改变现有任务列表和审计列表的兼容行为。
+ *
+ * <p>该类只负责“查询成本保护”：补默认时间窗口、限制最大窗口和 limit。
+ * 它不是权限层，Admin 写保护、授权和确认头仍由 Controller 层显式处理。
  */
 public class AdminQueryGuard {
 
@@ -46,6 +49,7 @@ public class AdminQueryGuard {
                                      Integer limit,
                                      LocalDateTime now) {
         LocalDateTime effectiveNow = Objects.requireNonNullElseGet(now, LocalDateTime::now);
+        // 缺省结束时间取当前时间，缺省开始时间从结束时间向前推默认窗口，避免无边界全表扫描。
         LocalDateTime effectiveEnd = createTimeEnd != null ? createTimeEnd : effectiveNow;
         LocalDateTime effectiveStart = createTimeStart != null
                 ? createTimeStart
@@ -65,6 +69,7 @@ public class AdminQueryGuard {
         if (limit == null || limit <= 0) {
             return defaultLimit;
         }
+        // 即使外部配置给了更大的 maxLimit，也会在构造函数中被 HARD_MAX_LIMIT 截断。
         return Math.min(limit, maxLimit);
     }
 

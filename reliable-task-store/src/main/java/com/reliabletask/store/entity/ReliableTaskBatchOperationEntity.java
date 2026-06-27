@@ -9,6 +9,9 @@ import java.time.LocalDateTime;
 
 /**
  * 批量运维操作表 Entity。
+ *
+ * <p>记录一次批量重试、取消等运维动作的选择条件和执行结果。
+ * 该表用于审计和结果追踪，不作为后续任务调度的输入。
  */
 @Data
 @TableName("reliable_task_batch_operation")

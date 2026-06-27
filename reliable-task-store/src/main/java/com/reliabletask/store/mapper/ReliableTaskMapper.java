@@ -16,6 +16,9 @@ import java.util.Map;
  *
  * <p>基于 MyBatis-Plus BaseMapper 提供基础 CRUD 能力。
  * 复杂查询（如拉取待执行任务、超时扫描等）通过 Wrapper 构建。
+ *
+ * <p>本接口中的 @Select 方法主要服务 Admin 统计和故障分析，不参与任务抢占和状态更新。
+ * 写路径的条件更新、租约 CAS 和批量查询仍集中在 MyBatisTaskStore 中，便于统一审查并发语义。
  */
 @Mapper
 public interface ReliableTaskMapper extends BaseMapper<ReliableTaskEntity> {
@@ -26,6 +29,11 @@ public interface ReliableTaskMapper extends BaseMapper<ReliableTaskEntity> {
     @Select("SELECT task_type AS taskType, COUNT(*) AS count FROM reliable_task GROUP BY task_type")
     List<Map<String, Object>> countByTaskType();
 
+    /**
+     * 按任务类型统计失败排行。
+     *
+     * <p>调用方必须先经过 AdminQueryGuard 归一化时间窗口和 limit，避免无边界聚合查询。
+     */
     @Select("""
             <script>
             SELECT
@@ -54,6 +62,11 @@ public interface ReliableTaskMapper extends BaseMapper<ReliableTaskEntity> {
                                                   @Param("limit") int limit,
                                                   @Param("failedStatus") int failedStatus);
 
+    /**
+     * 按错误码统计失败排行。
+     *
+     * <p>空错误码统一折叠为 UNKNOWN，便于 Admin 页面把“未分类失败”作为一组展示。
+     */
     @Select("""
             <script>
             SELECT
@@ -82,6 +95,9 @@ public interface ReliableTaskMapper extends BaseMapper<ReliableTaskEntity> {
                                                    @Param("limit") int limit,
                                                    @Param("failedStatus") int failedStatus);
 
+    /**
+     * 按任务类型和错误码联合统计失败排行，用于定位“哪类任务因什么原因失败最多”。
+     */
     @Select("""
             <script>
             SELECT

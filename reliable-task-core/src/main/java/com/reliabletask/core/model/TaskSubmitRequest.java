@@ -11,6 +11,9 @@ import lombok.NoArgsConstructor;
  *
  * <p>业务方通过 TaskTemplate.submit() 投递任务时使用的请求对象。
  * 使用 Builder 模式构建，必填字段通过构造/Builder 强制，可选字段有默认值。
+ *
+ * <p>该对象只表达“提交意图”，不会直接决定最终入库状态。实际入库前还会经过模板层的
+ * 参数校验、payload 序列化、幂等键生成、事务同步和 TaskStore 的唯一键兜底。
  */
 @Data
 @Builder
@@ -47,6 +50,8 @@ public class TaskSubmitRequest {
      *
      * <p>设置后由 TaskPayloadSerializer 在投递前序列化为入库字符串。
      * 如果同时设置 payload 和 payloadObject，优先使用 payloadObject。
+     * 这是为了让面向对象的新入口覆盖兼容字符串入口，避免同一次投递出现两份 payload
+     * 时读者误以为二者会合并或同时入库。
      */
     private Object payloadObject;
 
@@ -63,6 +68,7 @@ public class TaskSubmitRequest {
      * <p>为空时默认使用 taskType:bizType:bizId 生成幂等键。
      * 该值会写入 bizUniqueKey，长度不能超过 schema 中的 256 字符。
      * 不建议放入手机号、身份证、Token 等敏感原文。
+     * 幂等键是“同一业务意图”的稳定身份，不是任务执行锁；重复投递命中后会返回既有任务。
      */
     private String idempotencyKey;
 

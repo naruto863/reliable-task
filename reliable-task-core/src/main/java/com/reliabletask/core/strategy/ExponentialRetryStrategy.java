@@ -15,6 +15,9 @@ import java.util.function.DoubleSupplier;
  * <p>示例: intervalMs=1000, multiplier=2.0 → 1s, 2s, 4s, 8s, 16s...
  *
  * <p>默认 multiplier 为 2.0，可通过构造函数自定义。
+ *
+ * <p>当开启 jitter 时，会在已封顶的延迟值上下浮动，最后再次受 maxDelayMs 约束。
+ * 这样既能削峰，避免多个 Worker 同时重试，又不会突破用户声明的最大等待时间。
  */
 public class ExponentialRetryStrategy implements RetryStrategy {
 
@@ -74,6 +77,7 @@ public class ExponentialRetryStrategy implements RetryStrategy {
             return Math.max(cappedDelay, 0L);
         }
 
+        // randomSupplier 主要服务测试和可插拔随机源；归一化可防御异常实现返回 NaN 或越界值。
         double random = normalizeRandom(randomSupplier.getAsDouble());
         double min = cappedDelay * (1.0D - jitterRatio);
         double max = cappedDelay * (1.0D + jitterRatio);

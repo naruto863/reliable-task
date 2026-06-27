@@ -13,6 +13,7 @@ import java.util.UUID;
  * <p>示例: myhost-01:a3f8b2c1
  *
  * <p>使用单例模式，Worker ID 在应用生命周期内保持不变。
+ * 该 ID 不是持久节点身份，应用重启后会生成新值；租约表依赖它区分当前进程持有的锁和心跳。
  */
 @Slf4j
 public class WorkerIdGenerator {

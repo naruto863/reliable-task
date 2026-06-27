@@ -15,6 +15,9 @@ import java.util.Map;
  *
  * <p>默认注册 FIXED 和 EXPONENTIAL。用户传入的策略会覆盖相同类型或名称的内置策略；
  * 当注册了 type=CUSTOM 的策略后，RetryEngine 可通过 RetryStrategyType.CUSTOM 使用它。
+ *
+ * <p>注册表同时按枚举类型和名称索引策略。名称索引统一转大写，便于配置项大小写不敏感；
+ * 类型索引用于框架内部快速路由，名称索引用于 Spring Boot 配置和用户自定义策略接入。
  */
 public class RetryStrategyRegistry {
 
@@ -41,6 +44,7 @@ public class RetryStrategyRegistry {
     }
 
     public RetryStrategy getStrategy(RetryStrategyType type) {
+        // type 为空时回退 EXPONENTIAL，保持历史默认重试语义，不把空配置解释为“不重试”。
         RetryStrategyType effectiveType = type != null ? type : RetryStrategyType.EXPONENTIAL;
         RetryStrategy strategy = strategiesByType.get(effectiveType);
         if (strategy == null) {
@@ -64,6 +68,7 @@ public class RetryStrategyRegistry {
         if (strategy == null) {
             return;
         }
+        // 后注册覆盖先注册：业务自定义策略可以有意替换内置策略的实现或显示名称。
         RetryStrategyType type = strategy.getType();
         if (type != null) {
             strategiesByType.put(type, strategy);

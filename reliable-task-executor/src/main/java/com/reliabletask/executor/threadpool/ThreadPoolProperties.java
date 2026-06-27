@@ -10,6 +10,9 @@ import java.util.Map;
  *
  * <p>支持全局默认配置和按 taskType 的独立配置。
  * 未配置的 taskType 使用 default 线程池。
+ *
+ * <p>这些配置只影响本 JVM 的执行并发和排队能力，不改变数据库侧任务抢占条件。
+ * 与 Worker 背压一起使用时，拉取数量会尽量贴合当前执行器可用容量。
  */
 @Data
 public class ThreadPoolProperties {
@@ -57,6 +60,9 @@ public class ThreadPoolProperties {
 
     /**
      * 单个 taskType 的线程池配置
+     *
+     * <p>未显式配置的字段会在 TaskExecutorFactory 中回退到全局默认值，
+     * 因此这里保持简单数据对象，不在 setter 中做归一化。
      */
     @Data
     public static class PoolConfig {

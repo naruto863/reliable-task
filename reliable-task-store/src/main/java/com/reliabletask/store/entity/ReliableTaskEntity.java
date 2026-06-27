@@ -9,6 +9,9 @@ import java.time.LocalDateTime;
  * 任务主表 Entity
  *
  * <p>对应数据库表 reliable_task，存储异步任务实例的完整信息。
+ *
+ * <p>Entity 只表达数据库列结构。状态流转、幂等、租约 CAS 和恢复条件不要写在实体上，
+ * 统一放在 TaskStore/TaskStateMachine，避免持久化模型承载业务行为。
  */
 @Data
 @TableName("reliable_task")
@@ -37,6 +40,8 @@ public class ReliableTaskEntity {
 
     /**
      * 幂等键，格式: task_type:biz_type:biz_id
+     *
+     * <p>显式 idempotencyKey 会覆盖默认格式，因此这里保存的是最终入库键，而不是固定拼接结果。
      */
     private String bizUniqueKey;
 
@@ -97,6 +102,8 @@ public class ReliableTaskEntity {
 
     /**
      * 当前执行节点 ID
+     *
+     * <p>仅表示当前租约持有者或最近执行节点，Worker 重启后会生成新的 workerId。
      */
     private String workerId;
 

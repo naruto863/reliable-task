@@ -13,6 +13,10 @@ import java.util.Map;
  * <p>前缀: reliable-task
  * <p>所有配置项均可通过 application.yml 覆盖，默认值保证开箱即用。
  *
+ * <p>本类只承载 Spring Boot 配置绑定，不直接执行业务逻辑。
+ * 自动配置会把这些外部配置转换成执行器、恢复扫描、Admin 和指标等模块自己的运行时属性对象。
+ * 对标记为“保留配置”的字段，当前版本保持兼容占位，避免用户误以为修改后会立即改变运行行为。
+ *
  * <p>使用示例:
  * <pre>
  * reliable-task:
@@ -186,6 +190,8 @@ public class ReliableTaskProperties {
         public static class Backpressure {
             /**
              * 是否启用 Worker 背压，默认 false 保持 V1.5 行为
+             *
+             * <p>开启后本轮拉取数量会受执行器剩余容量约束，适合任务处理时间长或队列容量较小的场景。
              */
             private boolean enabled = false;
 
@@ -204,6 +210,8 @@ public class ReliableTaskProperties {
         public static class Heartbeat {
             /**
              * 是否启用 Worker 心跳，默认 false 保持 V1.5 行为
+             *
+             * <p>心跳开启后执行器会续约任务锁，并向运维表报告 Worker 容量；关闭时仍可正常执行短任务。
              */
             private boolean enabled = false;
 
@@ -259,6 +267,8 @@ public class ReliableTaskProperties {
     public static class Executor {
         /**
          * 执行器模式，默认 platform；virtual 模式使用 JDK 21 虚拟线程。
+         *
+         * <p>virtual 模式仍会用 maxSize 作为业务并发上限，不是无限制提交。
          */
         private ThreadPoolProperties.ExecutionMode mode = ThreadPoolProperties.ExecutionMode.PLATFORM;
 
@@ -302,6 +312,8 @@ public class ReliableTaskProperties {
     public static class Metrics {
         /**
          * 是否启用 Micrometer 指标，默认 false
+         *
+         * <p>关闭时自动配置会注入 Noop 记录器，执行链路无需因指标开关而分支。
          */
         private boolean enabled = false;
 
@@ -323,6 +335,8 @@ public class ReliableTaskProperties {
     public static class Alert {
         /**
          * 是否启用告警闭环，默认 false
+         *
+         * <p>开启后只负责判断阈值和调用 AlarmNotifier；真正的短信、IM 或工单发送由用户实现扩展点。
          */
         private boolean enabled = false;
 
@@ -354,6 +368,8 @@ public class ReliableTaskProperties {
     public static class Idempotency {
         /**
          * 默认幂等策略，默认 STRICT_UNIQUE 保持 V1.5 行为
+         *
+         * <p>该值必须匹配已注册 IdempotencyStrategy 的 name()，否则投递时会拒绝未知策略。
          */
         private String strategy = "STRICT_UNIQUE";
     }
@@ -415,11 +431,15 @@ public class ReliableTaskProperties {
     public static class Admin {
         /**
          * 是否启用管理后台，默认 false
+         *
+         * <p>Admin starter 必须被显式引入且本开关为 true 才会暴露接口，避免 worker 应用默认开放运维 API。
          */
         private boolean enabled = false;
 
         /**
          * 是否启用 Admin 写操作，默认 false
+         *
+         * <p>只读查询和控制台能力可以单独开放；重试、取消、改 payload、批量操作等写入口还要通过 auth/audit/confirm 校验。
          */
         private boolean writeEnabled = false;
 
@@ -508,6 +528,8 @@ public class ReliableTaskProperties {
         public static class Auth {
             /**
              * 是否启用 Admin 权限检查，默认 true
+             *
+             * <p>生产环境建议保持开启并提供 TaskAuthorizationProvider；若关闭，写操作还会被审计和确认头保护。
              */
             private boolean enabled = true;
         }

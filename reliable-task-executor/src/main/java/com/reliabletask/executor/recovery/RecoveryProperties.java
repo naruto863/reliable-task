@@ -7,6 +7,9 @@ import lombok.Data;
  *
  * <p>控制补偿扫描定时任务的开关、间隔和超时阈值。
  * 用于发现并重置因 afterCommit 异常或 Worker 崩溃而卡住的 RUNNING 任务。
+ *
+ * <p>恢复扫描只把“锁已过期的 RUNNING 任务”重置回可调度状态，不主动处理
+ * SUCCESS/DEAD/CANCELLED 等终态任务，也不越过 TaskStore 的 CAS 条件。
  */
 @Data
 public class RecoveryProperties {

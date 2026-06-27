@@ -13,6 +13,9 @@ import lombok.extern.slf4j.Slf4j;
  * 与 TaskInstance 中的配置合并，返回最终生效的重试参数。
  *
  * <p>优先级: @TaskRetryable 注解 > TaskInstance 配置 > 默认值
+ *
+ * <p>注解代表 Handler 作者对该任务类型的硬约束，TaskInstance 代表提交方的单任务偏好，
+ * 全局配置只负责提供跨任务兜底上限。因此解析逻辑保持单向覆盖，不在运行期回写任务记录。
  */
 @Slf4j
 public class RetryStrategyResolver {
@@ -112,6 +115,7 @@ public class RetryStrategyResolver {
 
     private static long resolveMinDelayMs(RetryProperties retryProperties, long maxDelayMs) {
         long minDelayMs = Math.max(0L, retryProperties.getMinDelayMs());
+        // minDelay 不能超过 maxDelay，否则下游重试计算会出现“最小值大于最大值”的语义冲突。
         return Math.min(minDelayMs, maxDelayMs);
     }
 
