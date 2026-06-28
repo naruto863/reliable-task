@@ -19,6 +19,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 1. 使用 @TaskHandler 注解自动注册
  * 2. 使用 @TaskRetryable 配置重试策略
  * 3. 模拟第三方调用失败后自动重试成功
+ *
+ * <p>该 Handler 使用内存 Map 统计尝试次数，只用于本地演示“前两次失败、第三次成功”的重试效果。
+ * 生产 Handler 不应依赖进程内状态判断业务幂等，应由业务库、外部系统幂等号或可靠任务状态兜底。
  */
 @Slf4j
 @Component
@@ -40,6 +43,7 @@ public class CreateShipmentHandler implements com.reliabletask.core.spi.TaskHand
 
     @Override
     public void execute(TaskInstance task) {
+        // 本示例要求对象 payload，保留该方法是为了明确提示错误接入方式。
         throw new UnsupportedOperationException("CREATE_SHIPMENT requires ShipmentPayload");
     }
 
@@ -54,14 +58,14 @@ public class CreateShipmentHandler implements com.reliabletask.core.spi.TaskHand
             throw new NonRetryableException("Invalid order data for demo: " + task.getBizId());
         }
 
-        // 模拟第三方物流 API 调用
+        // 模拟第三方物流 API 调用：同一 bizId 前两次抛异常，交给 RetryEngine 调度后续重试。
         int attempt = attempts.computeIfAbsent(task.getBizId(), key -> new AtomicInteger()).incrementAndGet();
         if (attempt <= 2) {
             log.warn("Shipment API call failed (attempt {}): orderNo={}", attempt, task.getBizId());
             throw new RuntimeException("Shipment API timeout (simulated failure #" + attempt + ")");
         }
 
-        // 模拟成功
+        // 第三次起模拟成功，任务会由执行器标记为 SUCCESS 并释放租约。
         log.info("Shipment created successfully: orderNo={}, after {} attempts", task.getBizId(), attempt);
     }
 }

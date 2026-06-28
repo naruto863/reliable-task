@@ -15,6 +15,7 @@ import java.util.Map;
  * 演示接口
  *
  * <p>提供简单的下单接口，用于演示 ReliableTask 的完整流程。
+ * Controller 只负责把 HTTP 参数转给示例 Service，不承载幂等、事务或重试规则。
  */
 @Slf4j
 @RestController
@@ -55,6 +56,8 @@ public class DemoController {
 
     /**
      * 重复投递同一业务任务，演示 V1.5 幂等键 MVP 行为。
+     *
+     * <p>返回的 firstTaskId 和 secondTaskId 应相同，用来证明显式 idempotencyKey 生效。
      */
     @PostMapping("/order/duplicate")
     public Result<Map<String, String>> createDuplicateOrder(

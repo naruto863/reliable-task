@@ -13,6 +13,9 @@ import java.time.LocalDateTime;
  *
  * <p>用于管理后台任务列表的多条件筛选和分页查询。
  * 所有字段均为可选，不传则不过滤。
+ *
+ * <p>该 DTO 承载查询条件，不负责权限和写保护。分页大小在这里做基础归一化，
+ * Admin 运维查询的默认时间窗口与最大窗口由 AdminQueryGuard 单独处理。
  */
 @Data
 @Builder
@@ -101,6 +104,9 @@ public class TaskQueryRequest {
 
     /**
      * 获取 MyBatis-Plus 分页偏移量
+     *
+     * <p>该方法保留给旧调用方使用；新的分页查询优先直接使用 normalizedPageNum/normalizedPageSize
+     * 构造 Page 对象，避免 maxPageSize 与默认值不一致。
      */
     public long getOffset() {
         return (long) (normalizedPageNum() - 1) * normalizedPageSize(DEFAULT_MAX_PAGE_SIZE);

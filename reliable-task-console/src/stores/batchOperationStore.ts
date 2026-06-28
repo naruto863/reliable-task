@@ -47,6 +47,7 @@ function clampLimit(value: unknown, maxLimit = DEFAULT_MAX_BATCH_LIMIT): number 
 }
 
 function compactRequest(request: BatchOperationRequest): BatchOperationRequest {
+  // 批量请求只发送用户明确填写的条件，避免空字符串扩大或扭曲后端匹配范围。
   return Object.fromEntries(
     Object.entries(request).filter(([, value]) => value !== '' && value !== null && value !== undefined),
   ) as BatchOperationRequest
@@ -85,6 +86,7 @@ export const useBatchOperationStore = defineStore('batchOperation', {
       this.executeResult = null
     },
     buildRequest(dryRun: boolean): BatchOperationRequest {
+      // dryRun=true 用于预览，dryRun=false 用于真正执行；其余筛选条件必须保持一致。
       return compactRequest({
         taskType: this.filters.taskType,
         status: this.filters.status,
@@ -110,6 +112,7 @@ export const useBatchOperationStore = defineStore('batchOperation', {
     },
     async execute(action: BatchExecuteAction, api: BatchApiClient = adminApiClient) {
       if (!this.previewResult) {
+        // 前端要求先 preview 再执行，配合后端 dryRun/audit 让批量写入具备可复核入口。
         this.error = localError('Preview required before executing a batch operation.')
         return
       }

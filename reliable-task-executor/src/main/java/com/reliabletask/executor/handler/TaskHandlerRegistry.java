@@ -16,6 +16,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>Spring 启动时自动收集所有 TaskHandler Bean，
  * 按 getTaskType() 注册到内存 Map 中，供 TaskExecutor 路由使用。
+ *
+ * <p>同一个 taskType 只能绑定一个 Handler。重复注册同一实例视为幂等，注册不同实例则快速失败，
+ * 避免运行期某个任务类型随机路由到不同实现。
  */
 @Slf4j
 @Component
@@ -88,6 +91,7 @@ public class TaskHandlerRegistry {
             return;
         }
         if (existing == handler) {
+            // Spring 父子容器或重复刷新事件可能触发同一 Bean 再次注册，此处保持幂等。
             log.debug("TaskHandler already registered: type={}, class={}",
                     taskType, handlerClass.getSimpleName());
             return;

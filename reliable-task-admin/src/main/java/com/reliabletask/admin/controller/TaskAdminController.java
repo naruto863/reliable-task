@@ -42,6 +42,9 @@ import java.util.Map;
  *
  * <p>提供任务列表分页查询、任务详情、执行日志、统计数据等只读接口。
  * 所有接口路径前缀: /api/reliable-task
+ *
+ * <p>写操作默认按“写开关 → 安全配置 → 二次确认 → 授权 → 状态更新 → 审计/事件”的顺序执行。
+ * 这个顺序用于避免误开启危险运维能力，也保证失败的写前置条件能被审计记录。
  */
 @RestController
 @RequestMapping("/api/reliable-task")
@@ -739,6 +742,7 @@ public class TaskAdminController {
     }
 
     private ConsoleCapabilitiesVO buildConsoleCapabilities() {
+        // 控制台只根据 capabilities 渲染可用能力，避免前端猜测后端开关和安全策略。
         ConsoleCapabilitiesVO capabilities = new ConsoleCapabilitiesVO();
         capabilities.setAdminEnabled(true);
         capabilities.setWriteEnabled(writeEnabled);
@@ -791,6 +795,7 @@ public class TaskAdminController {
             return view;
         }
 
+        // payload 默认脱敏展示；只有显式启用 plaintext 时才返回明文，避免控制台无意泄露业务敏感数据。
         view.setPayloadMasked(!payloadPlaintextEnabled);
         view.setPayloadPreview(payloadPlaintextEnabled
                 ? truncatePayloadPreview(payload)
@@ -819,6 +824,7 @@ public class TaskAdminController {
 
     private <T> Result<T> rejectTaskWriteIfNotAllowed(String operationType, String action, String operator,
                                                        Long taskId, String traceId, String confirmOperation) {
+        // 写操作门禁顺序固定：功能开关、安全配置、人工确认、细粒度授权，任何一步失败都不进入状态更新。
         Result<T> disabled = rejectWriteIfDisabled();
         if (disabled != null) {
             return disabled;
@@ -837,6 +843,7 @@ public class TaskAdminController {
 
     private <T> Result<T> rejectBatchWriteIfNotAllowed(String operationType, String operator,
                                                        String traceId, String confirmOperation) {
+        // 批量写操作影响面更大，复用同一门禁链路并统一要求 TASK_BATCH_OPERATION 权限。
         Result<T> disabled = rejectWriteIfDisabled();
         if (disabled != null) {
             return disabled;
@@ -856,11 +863,13 @@ public class TaskAdminController {
     private <T> Result<T> rejectUnsafeTaskWriteConfig(String operationType, String operator,
                                                       Long taskId, String traceId) {
         if (!authEnabled) {
+            // 开启写能力却未开启认证授权属于不安全配置，直接拒绝而不是降级为匿名写。
             String message = "Admin write operation requires reliable-task.admin.auth.enabled=true";
             recordAdminAudit(operationType, operator, taskId, "write precondition", "FAILED", message, traceId);
             return Result.error(403, message);
         }
         if (!auditEnabled) {
+            // 人工运维写操作必须可追踪；未开启审计时拒绝执行，避免出现不可追溯的状态改动。
             return Result.error(403,
                     "Admin write operation requires reliable-task.admin.audit.enabled=true");
         }
@@ -869,11 +878,13 @@ public class TaskAdminController {
 
     private <T> Result<T> rejectUnsafeBatchWriteConfig(String operationType, String operator, String traceId) {
         if (!authEnabled) {
+            // 批量写的安全前置与单任务写保持一致，避免不同入口出现权限绕过。
             String message = "Admin write operation requires reliable-task.admin.auth.enabled=true";
             recordBatchAudit(operationType, operator, null, "write precondition", "FAILED", message, traceId);
             return Result.error(403, message);
         }
         if (!auditEnabled) {
+            // 批量操作即使全部失败也需要留痕，因此审计关闭时不允许进入执行阶段。
             return Result.error(403,
                     "Admin write operation requires reliable-task.admin.audit.enabled=true");
         }
@@ -886,6 +897,7 @@ public class TaskAdminController {
         if (!writeConfirmationRequired || isConfirmed(confirmOperation)) {
             return null;
         }
+        // 二次确认头用于拦截脚本误调用或页面误触，失败也记录审计，便于追踪危险操作尝试。
         String message = "X-Confirm-Operation: true is required";
         recordAdminAudit(operationType, operator, taskId, "write confirmation", "FAILED", message, traceId);
         return Result.error(400, message);
@@ -896,6 +908,7 @@ public class TaskAdminController {
         if (!writeConfirmationRequired || isConfirmed(confirmOperation)) {
             return null;
         }
+        // 批量入口同样要求确认头；预览虽然 dry-run，也按写入口处理，避免前端/脚本绕过统一门禁。
         String message = "X-Confirm-Operation: true is required";
         recordBatchAudit(operationType, operator, null, "write confirmation", "FAILED", message, traceId);
         return Result.error(400, message);
@@ -911,6 +924,7 @@ public class TaskAdminController {
             return null;
         }
         if (authorizationProvider == null) {
+            // authEnabled=true 时必须提供授权实现；缺失 provider 比全部放行更安全。
             recordAdminAudit("AUTH_DENIED", operator, taskId, "action=" + action,
                     "FAILED", "authorization provider is not configured", traceId);
             return Result.error(403, "Forbidden: " + action);
@@ -990,6 +1004,7 @@ public class TaskAdminController {
             }
             return findBatchTaskIds(request, limit);
         }
+        // 未显式指定状态时，只取消尚未终结且可安全中断的 PENDING/RETRYING，避免批量取消 RUNNING 任务。
         List<Long> pendingIds = taskOperationsStore.findOperableTaskIds(request.taskType(), TaskStatus.PENDING,
                 request.createTimeStart(), request.createTimeEnd(), limit);
         if (pendingIds.size() >= limit) {
@@ -1008,6 +1023,7 @@ public class TaskAdminController {
         if (!dryRun) {
             for (Long taskId : taskIds) {
                 try {
+                    // 批量操作逐条执行并统计部分失败，不因为单个任务状态已变化而中断整个批次。
                     if (Boolean.TRUE.equals(operation.apply(taskId))) {
                         successCount++;
                     } else {

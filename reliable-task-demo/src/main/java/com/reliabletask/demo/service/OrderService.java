@@ -17,6 +17,9 @@ import java.util.Map;
  * <p>演示在事务方法中投递异步任务的完整流程。
  * 订单创建成功后，通过 TaskTemplate 投递发货任务，
  * 任务会在当前业务事务内写入任务表，业务事务回滚时任务写入一并回滚。
+ *
+ * <p>示例中没有真正写订单表，重点是展示“业务事务 + 任务投递”的边界：
+ * 真实业务应先完成订单持久化，再在同一事务中提交可靠任务。
  */
 @Slf4j
 @Service
@@ -98,6 +101,7 @@ public class OrderService {
                 .taskType("CREATE_SHIPMENT")
                 .bizType("ORDER")
                 .bizId(orderNo)
+                // 使用业务稳定键确保重复请求不会创建多条发货任务。
                 .idempotencyKey(shipmentIdempotencyKey(orderNo))
                 .maxRetryCount(3)
                 .retryIntervalMs(2000L)
@@ -105,6 +109,7 @@ public class OrderService {
     }
 
     private String shipmentIdempotencyKey(String orderNo) {
+        // 前缀把幂等空间限定在“订单发货”语义下，避免与其他订单相关任务共用同一个 bizId 时冲突。
         return "shipment:order:" + orderNo;
     }
 }

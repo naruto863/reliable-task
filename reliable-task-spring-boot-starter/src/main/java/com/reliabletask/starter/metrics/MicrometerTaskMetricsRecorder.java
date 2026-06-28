@@ -20,6 +20,10 @@ import java.util.function.ToDoubleFunction;
 
 /**
  * 基于 Micrometer 的任务指标记录器。
+ *
+ * <p>执行事件类指标使用 Counter/Timer 即时记录；全局积压、运行中、死信等 Gauge
+ * 来自 TaskQueryStore 的统计快照。Gauge 读取带短 TTL 缓存，避免 Prometheus 高频 scrape
+ * 时每个指标都重复查询数据库。
  */
 public class MicrometerTaskMetricsRecorder implements TaskMetricsRecorder {
 
@@ -90,6 +94,7 @@ public class MicrometerTaskMetricsRecorder implements TaskMetricsRecorder {
                 "status", event.getStatus() == null ? "UNKNOWN" : event.getStatus().name()
         );
         if (includeWorkerIdTag) {
+            // worker_id 可能带来较高基数，默认关闭，只在排查单 Worker 问题时由配置显式开启。
             tags = tags.and("worker_id", valueOrUnknown(event.getWorkerId()));
         }
         return tags;
@@ -170,6 +175,7 @@ public class MicrometerTaskMetricsRecorder implements TaskMetricsRecorder {
                 if (current != null && now < expiresAtMs) {
                     return current;
                 }
+                // 多个 Gauge 会共享同一份快照，TTL 内只触发一次 TaskQueryStore 统计查询。
                 TaskStatsVO loaded = taskStore.getStats();
                 cachedStats = loaded != null ? loaded : emptyStats();
                 expiresAtMs = now + ttlMs;

@@ -21,6 +21,9 @@ import org.springframework.beans.factory.ObjectProvider;
  *
  * <p>注册管理接口 Controller，使业务应用显式引入 Admin starter 后即可启用 Admin API，
  * 不依赖业务应用扫描 com.reliabletask.admin 包。
+ *
+ * <p>Admin 模块只在 reliable-task.admin.enabled=true 且存在查询/运维存储能力时装配。
+ * 写操作是否可用还要继续受 write-enabled、auth、audit、batch 和确认头配置约束。
  */
 @AutoConfiguration(after = {ReliableTaskAutoConfiguration.class, ReliableTaskStoreAutoConfiguration.class})
 @ConditionalOnProperty(prefix = "reliable-task.admin", name = "enabled", havingValue = "true", matchIfMissing = false)
@@ -32,6 +35,7 @@ public class ReliableTaskAdminAutoConfiguration {
     @ConditionalOnMissingBean(TaskAuthorizationProvider.class)
     @ConditionalOnProperty(prefix = "reliable-task.admin.auth", name = "enabled", havingValue = "false", matchIfMissing = false)
     public TaskAuthorizationProvider taskAuthorizationProvider() {
+        // 只有显式关闭 auth 时才提供 Noop provider；auth 开启但未提供 provider 时 Controller 会拒绝写操作。
         return new NoopTaskAuthorizationProvider();
     }
 
@@ -44,6 +48,7 @@ public class ReliableTaskAdminAutoConfiguration {
                                                    ObjectProvider<TaskEventPublisher> eventPublisher) {
         ReliableTaskProperties.Admin.Query query = properties.getAdmin().getQuery();
         ReliableTaskProperties.Admin.Console console = properties.getAdmin().getConsole();
+        // ObjectProvider 允许业务方按需接入授权和事件发布；未接入时 Controller 内部仍会保持安全降级。
         return new TaskAdminController(taskQueryStore,
                 taskOperationsStore,
                 properties.getAdmin().getAuth().isEnabled(),

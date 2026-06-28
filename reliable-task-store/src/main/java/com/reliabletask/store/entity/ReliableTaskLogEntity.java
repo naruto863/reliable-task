@@ -9,6 +9,9 @@ import java.time.LocalDateTime;
  * 任务执行日志表 Entity
  *
  * <p>对应数据库表 reliable_task_log，记录任务每次执行的详细结果。
+ *
+ * <p>日志是追加型事实记录，不驱动状态流转。任务当前状态以 reliable_task 主表为准，
+ * Admin 故障分析和慢任务查询再从日志表回溯执行过程。
  */
 @Data
 @TableName("reliable_task_log")

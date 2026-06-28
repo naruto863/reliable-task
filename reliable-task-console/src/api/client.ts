@@ -22,6 +22,12 @@ import type {
 
 export type ApiClientErrorKind = 'business' | 'http' | 'network' | 'parse'
 
+/**
+ * 前端统一错误类型。
+ *
+ * API 层把失败分成四类：业务错误、HTTP 状态错误、网络错误和响应解析错误。
+ * Store/View 只消费归一化后的错误，不需要知道 fetch、Result 包装或 JSON 解析细节。
+ */
 export interface ApiClientErrorOptions {
   kind: ApiClientErrorKind
   message: string
@@ -59,7 +65,17 @@ export interface RequestOptions {
   method?: string
   query?: QueryParams
   body?: unknown
+  /**
+   * 是否为 Admin 写操作。
+   *
+   * 写操作会附带 operator、traceId 和可选确认头；读操作保持轻量，避免无意义生成 traceId。
+   */
   write?: boolean
+  /**
+   * 是否发送 X-Confirm-Operation: true。
+   *
+   * 这是控制台与后端写保护合同的一部分，前端显式确认不替代后端 auth/audit/write gate。
+   */
   confirmOperation?: boolean
   traceId?: string
 }
@@ -117,6 +133,7 @@ function buildUrl(baseUrl: string, path: string, query?: RequestOptions['query']
   const url = `${normalizeBaseUrl(baseUrl)}${normalizedPath}`
   const params = new URLSearchParams()
 
+  // 过滤空字符串和 null/undefined，避免把未填写筛选项序列化成后端会误判的查询条件。
   Object.entries(query || {}).forEach(([key, value]) => {
     if (value !== null && value !== undefined && value !== '') {
       params.set(key, String(value))
@@ -153,6 +170,7 @@ export function createAdminApiClient(options: AdminApiClientOptions = {}): Admin
     headers.set('X-Operator', operatorProvider()?.trim() || DEFAULT_OPERATOR)
 
     if (requestOptions.write) {
+      // 后端 Admin 写操作要求可追踪、可确认。traceId 供审计串联，确认头供防误操作校验。
       headers.set('X-Trace-Id', requestOptions.traceId || traceIdFactory())
       if (requestOptions.confirmOperation) {
         headers.set('X-Confirm-Operation', 'true')
@@ -210,6 +228,7 @@ export function createAdminApiClient(options: AdminApiClientOptions = {}): Admin
     }
 
     if (payload.code !== 200) {
+      // HTTP 200 但 Result.code 非成功时，视为业务错误，保留后端 message 给页面展示。
       throw new ApiClientError({
         kind: 'business',
         code: payload.code,

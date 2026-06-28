@@ -14,6 +14,7 @@ import { useConsoleStore } from '@/stores/consoleStore'
 const route = useRoute()
 const consoleStore = useConsoleStore()
 
+// 导航项保持静态数组，避免每次路由切换重建菜单结构；选中态由 route.name 派生。
 const navItems = [
   {
     key: 'dashboard',
@@ -54,6 +55,7 @@ const capabilityTag = computed(() => {
     return { color: 'warning', text: 'API unreachable' }
   }
   if (consoleStore.capabilities) {
+    // 顶部标签只表达当前控制台能力摘要，真正按钮是否可点仍由各页面按能力逐项判断。
     return {
       color: consoleStore.isWriteAvailable ? 'orange' : 'blue',
       text: consoleStore.isWriteAvailable ? 'Write guarded' : 'Read-only',
@@ -63,6 +65,7 @@ const capabilityTag = computed(() => {
 })
 
 onMounted(() => {
+  // 测试环境由单测直接注入 store 状态，避免挂载时自动发起真实 HTTP 请求。
   if (import.meta.env.MODE !== 'test' && !consoleStore.capabilities && !consoleStore.loading) {
     void consoleStore.loadCapabilities()
   }

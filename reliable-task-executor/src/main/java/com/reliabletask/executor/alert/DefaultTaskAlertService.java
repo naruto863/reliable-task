@@ -13,6 +13,10 @@ import java.util.Deque;
 
 /**
  * 默认告警服务，负责将内部触发点转换为 AlarmNotifier 调用。
+ *
+ * <p>死信告警、失败率告警和积压告警都走同一个 AlarmNotifier SPI，但触发来源不同：
+ * 死信来自单任务状态流转，失败率来自内存滑动窗口，积压来自定时统计扫描。
+ * 告警发送失败只记录日志，不能影响任务执行或状态写入。
  */
 @Slf4j
 public class DefaultTaskAlertService implements TaskAlertService {
@@ -45,6 +49,7 @@ public class DefaultTaskAlertService implements TaskAlertService {
             return;
         }
 
+        // executionWindow 只保留当前 JVM 收到的执行结果，适合轻量级趋势告警，不等同于集群全局失败率。
         LocalDateTime now = LocalDateTime.now();
         executionWindow.addLast(new ExecutionPoint(now, event.isSuccess()));
         prune(now);
@@ -76,6 +81,7 @@ public class DefaultTaskAlertService implements TaskAlertService {
         try {
             alarmNotifier.notify(alarmType, reason);
         } catch (RuntimeException e) {
+            // 告警通道属于旁路依赖，失败时不能反向拖垮调度线程或业务 Handler。
             log.warn("Failed to send system alarm: type={}, notifier={}, reason={}",
                     alarmType, alarmNotifier.getName(), e.getMessage());
         }

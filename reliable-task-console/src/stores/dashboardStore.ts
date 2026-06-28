@@ -34,6 +34,7 @@ function buildWindowQuery(limit: number, windowHours: number | null): RecentFail
   }
 
   if (windowHours !== null) {
+    // 控制台使用浏览器当前时间构造短窗口查询；后端仍会按 AdminQueryGuard 限制最大窗口。
     const end = new Date()
     const start = new Date(end.getTime() - windowHours * 60 * 60 * 1000)
     query.createTimeStart = toLocalDateTime(start)
@@ -70,6 +71,7 @@ export const useDashboardStore = defineStore('dashboard', {
 
       try {
         const query = buildWindowQuery(this.limit, this.windowHours)
+        // 首页同时拉取总览、失败聚合和最近失败，三者互不依赖，可并行降低首屏等待时间。
         const failureTopQuery: FailureTopQuery = {
           groupBy: 'taskType,errorCode',
           ...query,

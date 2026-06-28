@@ -11,6 +11,9 @@ import java.util.Objects;
  *
  * <p>before 按 order 升序执行；after/onError 按逆序执行。拦截器自身异常会被记录并隔离，
  * 避免覆盖 Handler 的原始执行结果。
+ *
+ * <p>反向执行 after/onError 是典型栈式语义：越早进入的拦截器越晚退出，便于 trace、
+ * 资源清理、计时等横切逻辑形成成对的 enter/exit 边界。
  */
 @Slf4j
 public class TaskInterceptorChain {

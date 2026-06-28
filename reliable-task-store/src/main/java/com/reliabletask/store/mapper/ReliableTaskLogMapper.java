@@ -15,10 +15,16 @@ import java.util.List;
  * 任务执行日志表 Mapper
  *
  * <p>基于 MyBatis-Plus BaseMapper 提供基础 CRUD 能力。
+ *
+ * <p>自定义查询服务 Admin 故障页和慢任务页，只读执行日志，不回写任务状态。
+ * limit 和时间窗口由上层 AdminQueryGuard 控制，避免日志表在运维查询中被无界扫描。
  */
 @Mapper
 public interface ReliableTaskLogMapper extends BaseMapper<ReliableTaskLogEntity> {
 
+    /**
+     * 查询最近失败执行记录，按执行时间倒序返回。
+     */
     @Select("""
             <script>
             SELECT
@@ -59,6 +65,11 @@ public interface ReliableTaskLogMapper extends BaseMapper<ReliableTaskLogEntity>
                                              @Param("limit") int limit,
                                              @Param("failedStatus") int failedStatus);
 
+    /**
+     * 查询慢执行记录。
+     *
+     * <p>durationMsGte 是运维阈值，不等同于 Handler 的业务超时时间。
+     */
     @Select("""
             <script>
             SELECT

@@ -11,6 +11,7 @@ export interface AppErrorState {
 
 export function toAppErrorState(error: unknown): AppErrorState {
   if (error instanceof ApiClientError) {
+    // 后端业务码和 HTTP status 都可能承载 403/404 语义，这里统一折叠为页面可理解的错误状态。
     const statusCode = error.code || error.status
 
     if (statusCode === 403) {
@@ -32,6 +33,7 @@ export function toAppErrorState(error: unknown): AppErrorState {
     }
 
     if (error.kind === 'network') {
+      // 网络错误没有稳定 statusCode，页面应引导用户检查 API base、代理或后端进程。
       return {
         kind: 'network',
         title: 'API unreachable',

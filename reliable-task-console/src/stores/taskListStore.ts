@@ -64,6 +64,7 @@ function clampPageSize(value: unknown, maxPageSize = DEFAULT_MAX_PAGE_SIZE): num
 }
 
 function compactQuery(query: TaskListQuery): TaskListQuery {
+  // 路由和表单状态里会保留空字符串，真正请求前统一压缩，避免后端把空值当过滤条件。
   return Object.fromEntries(
     Object.entries(query).filter(([, value]) => value !== '' && value !== null && value !== undefined),
   ) as TaskListQuery
@@ -105,6 +106,7 @@ export const useTaskListStore = defineStore('taskList', {
       this.pageNum = 1
     },
     applyRouteQuery(query: Record<string, unknown>, maxPageSize = DEFAULT_MAX_PAGE_SIZE) {
+      // 任务列表筛选与 URL query 双向同步，刷新页面或复制链接时可以恢复同一筛选视图。
       this.pageNum = normalizePositiveInt(query.pageNum, 1)
       this.pageSize = clampPageSize(query.pageSize, maxPageSize)
       this.filters = {
@@ -128,6 +130,7 @@ export const useTaskListStore = defineStore('taskList', {
       return Object.fromEntries(Object.entries(query).map(([key, value]) => [key, String(value)]))
     },
     buildQuery(): TaskListQuery {
+      // pageNum/pageSize 始终随请求发送；筛选项为空时会被 compactQuery 移除。
       return compactQuery({
         pageNum: this.pageNum,
         pageSize: this.pageSize,

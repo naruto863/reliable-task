@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// 单独的 403 展示组件保留给需要阻断整页访问的场景；普通请求失败仍走 ErrorState。
 withDefaults(
   defineProps<{
     message?: string

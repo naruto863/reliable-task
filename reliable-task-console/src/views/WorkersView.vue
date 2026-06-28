@@ -25,6 +25,7 @@ function formatNullable(value: string | number | null | undefined): string {
 }
 
 function workerStatusClass(status: string | null): string {
+  // 兼容后端可能返回的历史状态文本，展示层只负责归类颜色，不改变原始 status 文案。
   const normalized = (status || '').toUpperCase()
   if (normalized === 'ONLINE' || normalized === 'ACTIVE') {
     return 'status-tag--success'

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { AppErrorState } from '@/utils/errorState'
 
+// 通用错误块只关心可展示的 AppErrorState，重试动作由父页面决定具体重新加载哪个资源。
 defineProps<{
   state: AppErrorState
 }>()
