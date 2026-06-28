@@ -23,7 +23,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.49.1",
-    "@types/node": "^26.0.0",
+    "@types/node": "^26.0.1",
     "@vitejs/plugin-vue": "^6.0.7",
     "@vue/test-utils": "^2.4.6",
     "jsdom": "^25.0.1",
