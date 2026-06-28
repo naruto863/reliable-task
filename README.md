@@ -24,6 +24,7 @@ recovers timed-out executions, and exposes admin APIs for operational visibility
 - [Modules](#modules)
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
+- [Documentation Map](#documentation-map)
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Admin Operational Queries](#admin-operational-queries)
@@ -31,6 +32,7 @@ recovers timed-out executions, and exposes admin APIs for operational visibility
 - [Security](#security)
 - [Testing](#testing)
 - [FAQ](#faq)
+- [Roadmap](#roadmap)
 - [Release](#release)
 - [Contributing](#contributing)
 - [License](#license)
@@ -241,6 +243,24 @@ The demo configuration is intended for local exploration. Because audit and auth
 enabled in `application-example.yml`, the console shows read-only troubleshooting views and disables
 write buttons with the backend reason. Production write access still requires auth, audit,
 `X-Confirm-Operation: true`, network controls, and operator accountability.
+
+## Documentation Map
+
+New contributors can start with the versioned onboarding docs under `docs/getstart`:
+
+| Need | Start here |
+| --- | --- |
+| Understand what ReliableTask is | [Project overview](docs/getstart/00-project-overview.md) |
+| Understand runtime architecture | [Architecture guide](docs/getstart/01-architecture.md) |
+| Understand Maven modules and console boundaries | [Module map](docs/getstart/02-module-map.md) |
+| Follow submission, execution, retry, recovery and Admin flows | [Core flows](docs/getstart/03-core-flows.md) |
+| Review tables, states and schema ownership | [Domain model](docs/getstart/04-domain-model.md) |
+| Integrate with Admin APIs or console contracts | [API design](docs/getstart/05-api-design.md) |
+| Deploy demo, Admin and console safely | [Deployment guide](docs/getstart/06-deployment.md) |
+| Extend handlers, retry, codec, auth, audit or store SPI | [Extension guide](docs/getstart/07-extension-guide.md) |
+| Run the project locally | [Local development](docs/getstart/08-local-development.md) |
+| Troubleshoot backlog, DEAD tasks, retry storms or blocked validation | [Troubleshooting](docs/getstart/09-troubleshooting.md) |
+| Scan common decisions quickly | [FAQ](docs/getstart/10-faq.md) |
 
 ## Installation
 
@@ -652,6 +672,12 @@ Not until release closure confirms publication. Maven Central is the v1.0 target
 
 `0.x` is a preview stage. APIs and database schema may change before `v1.0.0`.
 Breaking changes, security fixes, and migration notes should be recorded in [CHANGELOG.md](CHANGELOG.md). For v1.0 preparation, see the [upgrade guide](docs/migration/v1.0-upgrade-guide.md).
+
+## Roadmap
+
+- `v1.0.0`: stabilize the API/SPI surface, schema initialization strategy, release workflow, upgrade guide, test matrix, example matrix, and readiness reporting.
+- Console/Admin: keep the console independent from Java starters, improve read-only diagnostics, and keep write operations behind server-side auth, audit and confirmation gates. See [Console and Admin roadmap](docs/console-admin-roadmap.md).
+- Operations: continue aligning monitoring, runbook and Prometheus examples with the real Admin API and Micrometer surface. See [monitoring guide](docs/operations/reliable-task-monitoring.md) and [runbook](docs/operations/reliable-task-runbook.md).
 
 ## Release
 
