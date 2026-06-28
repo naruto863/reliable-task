@@ -41,6 +41,7 @@ const batchStatusOptions = [
 ]
 
 const batchAvailable = computed(() =>
+  // 批量操作要求比普通写操作更严格：除写开关、鉴权、审计外，还必须显式开启 batch 能力。
   Boolean(
     consoleStore.capabilities?.writeEnabled &&
       consoleStore.capabilities.authEnabled &&
@@ -150,6 +151,7 @@ async function confirmBatchOperation() {
   if (!batchConfirmAction.value || batchConfirmationText.value !== 'CONFIRM') {
     return
   }
+  // 真正执行前要求用户输入 CONFIRM；API client 还会附加 X-Confirm-Operation 供后端再次校验。
   await batchStore.execute(batchConfirmAction.value)
   if (!batchStore.error) {
     closeBatchConfirm()
@@ -157,6 +159,7 @@ async function confirmBatchOperation() {
 }
 
 async function syncRouteAndLoad() {
+  // 列表筛选写回 URL 后再加载，确保刷新页面、复制链接和浏览器历史都能表达当前查询。
   await router.replace({ name: 'tasks', query: taskListStore.toRouteQuery() })
   await taskListStore.loadTasks()
 }
@@ -172,6 +175,7 @@ async function goToPage(pageNum: number) {
 }
 
 onMounted(() => {
+  // 进入页面时先从 URL 恢复筛选条件，再按恢复后的条件加载列表。
   taskListStore.applyRouteQuery(route.query, maxPageSize.value)
   if (import.meta.env.MODE !== 'test') {
     void taskListStore.loadTasks()

@@ -48,11 +48,13 @@ export const useTaskDetailStore = defineStore('taskDetail', {
       try {
         this.detail = await api.getConsoleTaskDetail(taskId)
       } catch (error) {
+        // 主详情失败时停止加载附属面板，因为后续日志/时间线都需要一个有效任务上下文。
         this.error = toAppErrorState(error)
         this.loading = false
         return
       }
 
+      // 附属面板彼此独立降级：执行日志、时间线、审计任一失败，不应遮挡已经加载的任务详情。
       try {
         this.logs = await api.getTaskLogs(taskId)
       } catch (error) {
@@ -91,6 +93,7 @@ export const useTaskDetailStore = defineStore('taskDetail', {
           await api.requeueTask(this.taskId)
         }
         this.operationSuccess = `${operation} succeeded`
+        // 写操作成功后立即重载详情，确保状态、日志、时间线和审计展示同一次后端事实。
         await this.loadTask(this.taskId, api)
       } catch (error) {
         this.operationError = toAppErrorState(error)
@@ -110,6 +113,7 @@ export const useTaskDetailStore = defineStore('taskDetail', {
       try {
         await api.updateTaskPayload(this.taskId, payload)
         this.operationSuccess = 'payload update succeeded'
+        // payload 更新同样走写保护合同，成功后重新读取 console-safe payload view。
         await this.loadTask(this.taskId, api)
       } catch (error) {
         this.operationError = toAppErrorState(error)

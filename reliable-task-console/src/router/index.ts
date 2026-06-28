@@ -9,6 +9,7 @@ import WorkersView from '@/views/WorkersView.vue'
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
+    // 路由 meta 同时驱动顶部标题和占位页描述，页面组件不需要重复维护导航文案。
     {
       path: '/',
       name: 'dashboard',

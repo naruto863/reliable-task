@@ -41,6 +41,7 @@ function setPageSize(event: Event) {
 }
 
 async function syncRouteAndLoad() {
+  // 审计查询同样同步到 URL，方便把某个 operator/时间窗口的排查结果分享给同事。
   await router.replace({ name: 'auditLogs', query: auditLogStore.toRouteQuery() })
   await auditLogStore.loadAuditLogs()
 }
@@ -56,6 +57,7 @@ async function goToPage(pageNum: number) {
 }
 
 onMounted(() => {
+  // 先恢复 URL 查询，再发起列表请求，避免 mounted 时先加载默认条件又马上被 URL 覆盖。
   auditLogStore.applyRouteQuery(route.query, maxPageSize.value)
   if (import.meta.env.MODE !== 'test') {
     void auditLogStore.loadAuditLogs()

@@ -9,6 +9,9 @@ import java.util.List;
 /**
  * 分页结果通用类
  *
+ * <p>返回给 Admin API 和控制台前端的分页读模型。records 只包含当前页数据，
+ * total/totalPages/hasNext 用于前端分页控件，不表达查询是否被截断。
+ *
  * @param <T> 数据类型
  */
 @Data
@@ -62,6 +65,7 @@ public class PageResult<T> {
         result.setTotal(total);
         result.setPageNum(pageNum);
         result.setPageSize(pageSize);
+        // pageSize 为 0 时避免除零，调用方正常应在请求归一化阶段把 pageSize 修正为正数。
         result.setTotalPages(pageSize == 0 ? 0 : (int) Math.ceil((double) total / pageSize));
         result.setHasNext(pageNum < result.getTotalPages());
         return result;

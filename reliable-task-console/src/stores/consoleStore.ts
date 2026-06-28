@@ -25,6 +25,8 @@ export const useConsoleStore = defineStore('console', {
     error: null as AppErrorState | null,
   }),
   getters: {
+    // 写操作只有在后端同时开启写开关、鉴权和审计时才被前端视为可用。
+    // 这与后端写保护保持同一语义，避免 UI 只看 writeEnabled 就暴露危险按钮。
     isWriteAvailable: (state) =>
       Boolean(
         state.capabilities?.writeEnabled &&
@@ -39,6 +41,7 @@ export const useConsoleStore = defineStore('console', {
       persistOperator(operator)
     },
     async loadCapabilities(api: Pick<AdminApiClient, 'getConsoleCapabilities'> = adminApiClient) {
+      // capabilities 是 console 的启动合同：页面据此决定只读、写入、批量和 payload 展示能力。
       this.loading = true
       this.error = null
 

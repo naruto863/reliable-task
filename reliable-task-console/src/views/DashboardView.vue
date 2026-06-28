@@ -9,6 +9,7 @@ import { useDashboardStore } from '@/stores/dashboardStore'
 
 const dashboardStore = useDashboardStore()
 
+// 指标卡是 TaskStats 的只读投影，缺失数据统一展示 '-'，避免页面在首次加载前闪烁 undefined。
 const metricCards = computed(() => {
   const stats = dashboardStore.stats
   return [
@@ -100,6 +101,7 @@ function onWindowChange(event: Event) {
 }
 
 onMounted(() => {
+  // 避免重复请求：如果 store 已经有 dashboard 数据，路由回来时直接复用现有快照。
   if (import.meta.env.MODE !== 'test' && !dashboardStore.hasData && !dashboardStore.loading) {
     refresh()
   }

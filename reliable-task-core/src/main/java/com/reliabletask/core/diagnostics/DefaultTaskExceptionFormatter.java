@@ -7,6 +7,9 @@ import java.util.concurrent.ExecutionException;
 
 /**
  * 默认异常诊断格式化器。
+ *
+ * <p>用于把 Handler 异常转成可入库的错误码、摘要和堆栈片段。
+ * 这里做长度截断是为了保护任务表/日志表字段和 Admin 展示，不改变原始异常对象。
  */
 public class DefaultTaskExceptionFormatter implements TaskExceptionFormatter {
 
@@ -46,6 +49,7 @@ public class DefaultTaskExceptionFormatter implements TaskExceptionFormatter {
         }
         Throwable cause = error;
         while (cause.getCause() != null && cause != cause.getCause()) {
+            // 异步执行常见 CompletionException/ExecutionException 包装，诊断时展示真正业务根因。
             if (cause instanceof CompletionException || cause instanceof ExecutionException) {
                 cause = cause.getCause();
             } else {

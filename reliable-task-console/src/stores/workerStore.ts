@@ -15,6 +15,7 @@ export const useWorkerStore = defineStore('workers', {
     staleError: null as AppErrorState | null,
   }),
   getters: {
+    // 汇总值只用于运维展示，不参与调度；真实调度容量仍由后端 Worker/Executor 控制。
     totalCapacity: (state) =>
       state.workers.reduce((sum, worker) => sum + Number(worker.maxConcurrency || 0), 0),
     availableCapacity: (state) =>
@@ -38,6 +39,7 @@ export const useWorkerStore = defineStore('workers', {
         return
       }
 
+      // stale 列表是辅助诊断面板。它加载失败时保留主 Worker 列表，并单独展示 staleError。
       try {
         this.staleWorkers = await api.listStaleWorkers()
       } catch (error) {

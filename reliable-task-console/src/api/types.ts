@@ -1,3 +1,8 @@
+/**
+ * 后端统一响应包装。
+ *
+ * Console 只接受 Result<T> 形态的响应；如果后端返回裸数据或非 JSON，client 会按 parse 错误处理。
+ */
 export interface ApiResult<T> {
   code: number
   message: string
@@ -12,7 +17,9 @@ export interface PageResult<T> {
 }
 
 export interface ConsoleCapabilities {
+  /** Admin API 是否可用。 */
   adminEnabled: boolean
+  /** 写操作总开关；即使为 true，也还需要 auth/audit 等能力同时满足。 */
   writeEnabled: boolean
   authEnabled: boolean
   auditEnabled: boolean
@@ -25,6 +32,11 @@ export interface ConsoleCapabilities {
   writeConfirmationRequired: boolean
 }
 
+/**
+ * payload 的控制台安全视图。
+ *
+ * 前端不直接依赖任务详情里的原始 payload 字段，只根据这些开关展示预览、遮蔽状态和可选明文。
+ */
 export interface PayloadView {
   payloadVisible: boolean
   payloadMasked: boolean
@@ -234,6 +246,11 @@ export interface BatchOperationRequest extends QueryParams {
   dryRun?: boolean
 }
 
+/**
+ * 批量操作结果。
+ *
+ * preview 和真正执行共用该结构；dryRun 用来区分当前结果是否只是预览。
+ */
 export interface BatchOperationResult {
   batchOperationId: number | null
   totalCount: number

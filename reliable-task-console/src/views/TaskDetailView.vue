@@ -34,6 +34,7 @@ const payloadDraft = ref('')
 const payloadValidationError = ref('')
 
 const writeAvailable = computed(() =>
+  // 详情页所有写按钮共享同一个能力判断，状态机允许性再由 isActionStatusAllowed 单独判断。
   Boolean(
     consoleStore.capabilities?.writeEnabled &&
       consoleStore.capabilities.authEnabled &&
@@ -81,6 +82,7 @@ const payloadText = computed(() => {
   if (!payloadView.value?.payloadVisible) {
     return 'No payload is attached to this task.'
   }
+  // 明文只有在后端显式允许 reveal 且返回 payloadPlaintext 时展示；前端不自行绕过遮蔽策略。
   if (payloadView.value.payloadRevealAllowed && payloadView.value.payloadPlaintext) {
     return payloadView.value.payloadPlaintext
   }
@@ -160,6 +162,7 @@ function isActionStatusAllowed(action: ConfirmAction): boolean {
   if (statusCode === undefined) {
     return false
   }
+  // 这里是前端可用性提示，不是最终状态机。后端仍会按 TaskStore 条件更新做最终保护。
   if (action === 'retry' || action === 'requeue') {
     return statusCode === 5 || statusCode === 6
   }
@@ -199,6 +202,7 @@ function closeConfirm() {
 
 function validatePayloadDraft(): string | null {
   try {
+    // 保存前压缩为标准 JSON 字符串，避免把格式化空白差异当成业务 payload 差异。
     return JSON.stringify(JSON.parse(payloadDraft.value))
   } catch {
     payloadValidationError.value = 'Payload must be valid JSON'
@@ -223,6 +227,7 @@ async function confirmOperation() {
   }
 
   if (!taskDetailStore.operationError) {
+    // 只有后端写入成功才关闭确认框；失败时保留上下文，方便用户读错误并重试。
     closeConfirm()
   }
 }
